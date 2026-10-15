@@ -1,0 +1,14 @@
+<resources>
+    <color name="primary">#FF6750A4</color>
+    <color name="primary_dark">#FF4F3C7C</color>
+    <color name="accent">#FF03DAC6</color>
+    <color name="bg_chat">#FFFAFAFA</color>
+    <color name="bg_user_bubble">#FF6750A4</color>
+    <color name="bg_assistant_bubble">#FFF0F0F0</color>
+    <color name="text_user">#FFFFFFFF</color>
+    <color name="text_assistant">#FF1A1A1A</color>
+    <color name="text_meta">#FF888888</color>
+    <color name="bg_thinking">#FFFFF8E1</color>
+    <color name="bg_error">#FFFFCDD2</color>
+    <color name="text_error">#FFB71C1C</color>
+</resources>

@@ -1,0 +1,159 @@
+============================================
+ numAi5 项目交接文件（2026-10-16）
+============================================
+
+一、项目定位
+----------------------------------------
+为 Android 5（minSdk 21）打造的多供应商 AI 聊天助手，基于 numAi
+（github.com/gohoski/numAi，Android 1.0+ 的 LLM 客户端）的架构蓝本重制。
+三大核心卖点：
+  1. 思考等级四档：Low / Default / High / MAX（聊天界面实时切换）
+  2. 多供应商多模型：A=DeepSeek、B=Claude+GPT、C=Qwen，
+     一段对话中不同消息可用不同供应商的模型（如识图用 B 的 Claude、简单问答用 A 的 ds）
+  3. 视觉识图：OpenAI 标准 content 数组 + image_url base64
+
+二、已确定的需求决策（与用户对齐）
+----------------------------------------
+  1. 供应商接入：全部走 OpenAI 兼容中转（NewAPI 等），一个 baseUrl 一套 key；
+     Claude 也经中转以 OpenAI 格式调用，客户端不写 Anthropic 适配层。
+  2. 思考等级：统一抽象四档，映射 reasoning_effort；不支持思考等级的模型直接忽略。
+  3. 模型切换作用域（用户给的规格）：
+     - 默认模型 + 发送时锁定 + 下一回合可切换
+     - 日常聊天用默认模型，不强制每次选择
+     - 发送前可临时切换；发送瞬间锁定到当前执行回合
+     - 回合内（含工具调用多步）沿用锁定模型；回合结束后下一条可再切
+     - 临时切换不修改全局默认模型
+     - 历史每条 assistant 消息记录实际用的 provider+model+thinkingLevel
+     - UI：输入栏紧凑模型选择器，显示供应商/模型名/默认或临时状态/下拉箭头；
+       菜单或选择器内可"设为默认"；默认模型带视觉标识；持久化到 SharedPreferences
+  4. 视觉识图：必须支持（用户明确纠正过"先不做"的错误选择）。
+  5. 依赖策略：代理决定，要求占用存储小 + 尽量美观。
+
+三、专家审查硬约束（必须遵守，详见 DEVELOPMENT_CONSTRAINTS.md）
+----------------------------------------
+  A1 reasoning_content 回传按模型开关 ModelDef.keepReasoningInHistory：
+     仅 DeepSeek V3.2+/V4 思考模式回传，其余模型回传会 400；
+     400 自愈：错误含 reasoning_content 时翻转开关重试一次（已实现）。
+  A2 字段名规范：tool 消息用 tool_call_id；流式聚合 delta.tool_calls（已实现）。
+  A3 四档映射标准/方言双模式：max 非官方值；标准模式 MAX→high，方言(NewAPI)→max；
+     DEFAULT 必须显式发 medium（GPT-5.x 默认 none，不发=不思考）（已实现 ThinkingMapper）。
+  A4 max_tokens 门控：o系/gpt-5→max_completion_tokens；推理模型不发 temperature（已实现）。
+  A5 权限：ACTION_PICK 的 content:// 无需存储权限；CAMERA 在 Android 6+ 设备运行时申请；
+     导出走 MediaStore.Downloads；运行时权限取决于设备系统版本（已实现 ImagePicker）。
+  A6 历史图片占位：仅当前回合 user 消息带 base64；更早历史替换 [图片] 占位；
+     原图存 filesDir/images/xxx.jpg，持久化只存文件名（已实现）。
+  B1 中转兼容双模式：默认统一 reasoning_effort；setting 有 newapiDialect 开关（已实现）。
+     /models 返回名剥前缀（anthropic/xxx→xxx）合并去重（已实现 ModelCatalog）。
+  B2 TLS：targetSdk 28 禁明文→network_security_config 全局放行+user CA 信任（已实现）。
+     ISRG Root X1 仅 Android 7.1.1+ 信任库，README 需提示（待办）。
+  B3 上下文截断：保留 system+最近12轮+字符预算（已实现 ContextTrimmer，UI 提示待接）。
+  B4 超时：readTimeout 300s（已实现）；断流→消息 isError+显示"生成中断"
+     并保留已收到部分（ApiService 已实现，UI Component 待接）。
+  B5 工具门控：ModelDef.supportsTools；qwq-32b/R1 不支持 function calling（已实现）。
+  B6 双通道去重：reasoningRaw 非空时不再从 content 解析 think 标签（已实现 Message）。
+  C 类：apply() 不用 commit()（已实现）；Gson+R8 keep 规则（已实现 proguard）；
+     Base64 NO_WRAP（已实现）；system 永纯字符串（已实现）；
+     错误 {"error":{"message"}} 透出（已实现 ApiClient）；日志不打 apiKey（注意）；
+     finish_reason:"length" 提示（待接）；allowBackup=false（已实现）。
+
+四、已完成文件清单（app/src/main/java/io/github/numai5/）
+----------------------------------------
+  model/    ThinkingLevel.java, Role.java, Chat.java, Config.java, Message.java
+  provider/ ModelDef.java, Provider.java, PresetModels.java, ModelCatalog.java
+  thinking/ ThinkingMapper.java
+  api/      ApiCallback.java, ApiError.java, ApiResponse.java, ApiRequest.java,
+            ApiClient.java(OkHttp), ApiService.java(SSE流式+400自愈+图片占位)
+  data/     ConfigManager.java(apply), ChatManager.java(Gson文件持久化),
+            MessageManager.java, ContextTrimmer.java
+  vision/   ImageCompressor.java(1080x1080 JPEG80 NO_WRAP), ImagePicker.java
+  ui/       MarkdownParser.java(简化Span版), MessageAdapter.java,
+            ModelSelectorSheet.java(按供应商分组+能力图标+默认徽标)
+  SettingsActivity.java（配置页：baseUrl/key/默认模型/系统提示/dialect开关/拉取模型）
+  资源：AndroidManifest.xml, network_security_config.xml, strings/colors/themes,
+        layout/(activity_main, activity_settings, item_message_assistant,
+        item_message_user, sheet_models, item_model), drawable/ic_launcher.xml
+  构建：build.gradle(root), settings.gradle, gradle.properties,
+        gradle-wrapper.properties(8.2), app/build.gradle, app/proguard-rules.pro,
+        DEVELOPMENT_CONSTRAINTS.md, 交接文件.txt
+
+五、明天第一步：补写 MainActivity.java（唯一缺失的核心 Java）
+----------------------------------------
+文件位置：app/src/main/java/io/github/numai5/MainActivity.java
+关键设计（务必按此实现）：
+  a) 状态机四变量 + 回合锁定：
+       defaultModel：来自 ConfigManager（持久化），不可直接改
+       pendingModel/pendingLevel：当前待发送选择（启动时 pending=default）
+       lockedModel/lockedLevel：发送瞬间锁定，回合内不变
+     发送流程：lockedModel=pendingModel → ApiService.chatCompletion(...,
+     lockedModel, lockedLevel) → 回合结束(onSuccess/onError)清 locked；
+     pending 保持用户选择（临时切换不回默认，符合"下一条可切换"）。
+  b) 流式 UI 刷新：ApiService 在后台线程填 Message.content/reasoningRaw，
+     MainActivity 用 Handler.postDelayed 每 200ms 轮询 currentAssistantMsg
+     内容长度变化，有变化才 adapter.notifyItemChanged(最后一项)+scrollToBottom；
+     回合结束/失败时停止轮询；断流时消息 isError 显示"生成中断"并保留已收内容。
+  c) 只要锁定模型 supportsThinking，UI 尊重其 effortDialect；四档通过
+     ThinkingMapper.apply(level, model.effortDialect) 转换（ApiService 已做）。
+  d) 图片选择：btnImage → 菜单(相册/拍照)；onActivityResult 调
+     ImagePicker.onActivityResult(...) 得文件名，加入 pendingImages；
+     发送时文件名列表附给当前 user 消息（ApiService 负责当回合 base64、历史占位）。
+     非视觉模型时点击图片提示"当前模型不支持视觉"。
+  e) 菜单（res/menu/menu_main.xml，待建）：新对话、历史、设置、
+     把当前 pendingModel 设为默认、关于。
+  f) onResume 刷新配置变化（设置页改默认模型后回来要生效）。
+  g) 发送前检查 ConfigManager.isValid()，无效 toast 提示去设置。
+
+六、其余待办清单
+----------------------------------------
+  [ ] res/menu/menu_main.xml + MainActivity 菜单逻辑
+  [ ] .github/workflows/build.yml（CI 自动构建，见第七节）
+  [ ] README.md（含 B2 提醒：Android 5-7 需注意 Let's Encrypt 短链证书）
+  [ ] values-zh-rCN/ 中文资源（strings.xml 已有中文 value，可暂不建）
+  [ ] 首次构建后修编译错（MainActivity 缺失是当前唯一已知阻塞）
+  [ ] 联调：中转站配置→拉取模型→默认模型→发消息→思考等级→识图→跨供应商切换
+  [ ] 断流/错误气泡 UI 组件（message meta 已预留 isError 分支）
+  [ ] ContextTrimmer 截断时 UI 轻提示（ApiService 已有 trimmed boolean）
+
+七、构建与发布（严格走 GitHub Actions，不在沙箱本地编译）
+----------------------------------------
+  仓库：github.com/Azx8788/numAi5（已推到 main 分支）
+  AGP 8.2.2 + Gradle 8.2 + JDK 17 + compileSdk 34 + minSdk 21 + targetSdk 28
+  （targetSdk 28 会在 lintVitalRelease 报 ExpiredTargetSdkVersion，已在 lint 里 disable）
+  CI 经验（来自 LanDrop 教训，必读）：
+    1. 不要用 android-actions/setup-android@v3（有 bug，装 SDK 失败）
+    2. ubuntu runner 自带 Android SDK：sdkmanager 装 "platforms;android-34"
+       + "build-tools;34.0.0" + 接受 licenses
+    3. gradle/actions/setup-gradle@v3 配 gradle-version:'8.2' 装指定版本
+    4. actions/setup-java@v4 temurin 17
+    5. apk 路径 app/build/outputs/apk/release/，上传到 actions/upload-artifact
+  发送 GitHub 消息的用户令牌不能进仓库文件！用 shell 环境即可。
+
+八、关键实现笔记（明天继续时的速查）
+----------------------------------------
+  - 四档映射：Low→low / Default→medium / High→high / MAX→(标准high｜方言max)
+  - ModelDef 六开关：supportsThinking, supportsVision, supportsTools=true,
+    keepReasoningInHistory=false, needsMaxCompletionTokens=false,
+    isReasoningOnly=false, effortDialect="standard"
+  - 预设模型（PresetModels，2026 当前主流）：
+    A: deepseek-v4-pro / deepseek-v4-flash / deepseek-v4-flash-vision-exp
+      （全部 keepReasoning=true；旧别名 deepseek-chat/reasoner 已停止用法）
+    B: claude-sonnet-4-6 / claude-opus-4-8 / gpt-4o / gpt-5-chat / gpt-5.4
+      （gpt-5.4 是 maxCompletion+reasoningOnly）
+    C: qwen3.5-plus / qwen3.5-flash / qwq-32b(不支持tools) / qwen3-vl-235b
+    /models 返回名带前缀会自动剥（anthropic/claude-xxx → claude-xxx）。
+  - 依赖：appcompat 1.6.1 / recyclerview 1.3.2 / material 1.11.0 /
+    okhttp 4.12.0 / gson 2.10.1 / desugar_jdk_libs 2.0.4；R8 后预计 ~3.5-4.5MB
+  - 关键坑：ChatManager.startNewChat 里那个占位 add/remove 请删掉（丑陋遗留）；
+    ApiService.buildRequestBody 是空壳可删或补全；注意 import 未使用项。
+
+九、参考与灵感
+----------------------------------------
+  - numAi 源码在工作区 /workspace/numAi（readStream SSE 解析、executeToolCalls
+    工具循环、MarkdownParser 600 行完整版都在里面，按需搬用）
+  - NewAPI 文档：docs.newapi.ai（OpenAI Chat Completions / reasoning_effort）
+  - 四档思考预算参考：minimal 2048 / low 4096 / medium 10000 / high 16000 /
+    xhigh·max 32000（Claude 系），Qwen 系 low 4096 / medium 16384 / high 32768
+
+============================================
+ 状态：核心模型/API/数据/视觉/半 UI 已落盘，MainActivity 未写，
+ 当前不可编译。明天按第五、六节顺序推进即可。
+============================================

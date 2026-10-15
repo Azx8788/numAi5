@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  B2 缓解：
+  - cleartextTrafficPermitted=true：targetSdk 28+ 默认禁明文，用户若填 http:// 中转可连（设置页仍提示优先 https）
+  - 信任 user CA：缓解 Android 5/6/7 的 Let's Encrypt 短链信任链缺失，允许用户装自定义根证书
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="user" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

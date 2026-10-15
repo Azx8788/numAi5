@@ -1,0 +1,30 @@
+<resources>
+    <string name="app_name">numAi5</string>
+    <string name="settings">设置</string>
+    <string name="new_chat">新对话</string>
+    <string name="history">历史</string>
+    <string name="send">发送</string>
+    <string name="attach_image">图片</string>
+    <string name="thinking_level">思考等级</string>
+    <string name="model_selector">模型</string>
+    <string name="set_as_default">设为默认</string>
+    <string name="base_url">中转站地址</string>
+    <string name="api_key">API Key</string>
+    <string name="default_model">默认模型</string>
+    <string name="system_prompt">系统提示词</string>
+    <string name="newapi_dialect">中转站带思考兼容层（NewAPI）</string>
+    <string name="fetch_models">拉取模型列表</string>
+    <string name="save">保存</string>
+    <string name="hint_input">输入消息...</string>
+    <string name="thinking_process">思考过程</string>
+    <string name="default_label">默认</string>
+    <string name="temp_label">临时</string>
+    <string name="config_invalid">请先在设置中配置中转站地址与 API Key</string>
+    <string name="generating">生成中…</string>
+    <string name="interrupted">生成中断</string>
+    <string name="truncated">因长度截断</string>
+    <string name="no_vision">当前模型不支持视觉</string>
+    <string name="no_tools">当前模型不支持工具调用</string>
+    <string name="about">关于</string>
+    <string name="cancel">取消</string>
+</resources>
