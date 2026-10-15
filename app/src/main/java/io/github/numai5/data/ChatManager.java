@@ -61,12 +61,10 @@ public class ChatManager {
     }
 
     public void startNewChat() {
-        Chat chat = new Chat(UUID.randomUUID().toString(), "", System.currentTimeTimeMillis());
-        chat.messages.add(new Message(Role.USER)); // 占位，实际发送时才添加
-        chat.messages.remove(0);
-        this.currentChat = chat;
-        chats.add(chat);
-    }
+            Chat chat = new Chat(UUID.randomUUID().toString(), "", System.currentTimeMillis());
+            this.currentChat = chat;
+            chats.add(chat);
+        }
 
     public List<Chat> getChats() {
         return new ArrayList<>(chats);
