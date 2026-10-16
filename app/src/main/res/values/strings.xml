@@ -8,35 +8,55 @@
     <string name="thinking_level">思考等级</string>
     <string name="model_selector">模型</string>
     <string name="set_as_default">设为默认</string>
-    <string name="base_url">中转站地址</string>
-    <string name="api_key">API Key</string>
     <string name="default_model">默认模型</string>
     <string name="system_prompt">系统提示词</string>
+    <string name="system_prompt_hint">你是一个有用的助手</string>
     <string name="newapi_dialect">中转站带思考兼容层（NewAPI）</string>
-    <string name="fetch_models">拉取模型列表</string>
     <string name="save">保存</string>
+    <string name="saved">已保存</string>
     <string name="hint_input">输入消息...</string>
     <string name="thinking_process">思考过程</string>
     <string name="default_label">默认</string>
     <string name="temp_label">临时</string>
-    <string name="config_invalid">请先在设置中配置中转站地址与 API Key</string>
+    <string name="config_invalid">请先在设置中配置供应商的中转地址与 API Key</string>
     <string name="generating">生成中…</string>
     <string name="interrupted">生成中断</string>
     <string name="truncated">因长度截断</string>
     <string name="no_vision">当前模型不支持视觉</string>
-    <string name="no_tools">当前模型不支持工具调用</string>
     <string name="about">关于</string>
     <string name="cancel">取消</string>
     <string name="ok">确定</string>
+    <string name="delete">删除</string>
     <string name="model_not_selected">未选择模型</string>
     <string name="set_default_success">已设为默认模型</string>
     <string name="about_version_format">版本 %1$s</string>
     <string name="from_gallery">从相册选择</string>
     <string name="from_camera">拍照</string>
-    <string name="remove_images">清除附件</string>
     <string name="images_attached_format">已附加 %1$d 张图片</string>
     <string name="camera_permission_denied">未授予相机权限</string>
     <string name="ctx_trimmed">对话较长，已截断较早的历史上下文</string>
     <string name="content_filtered">回复被内容过滤器截断</string>
     <string name="remove_images_format">🖼×%1$d · 清除</string>
+    <string name="thinking_default_label">🧠 Default</string>
+
+    <!-- 多供应商 -->
+    <string name="provider_list">供应商</string>
+    <string name="provider_hint">每个供应商独立配置中转地址与 Key，每个站点的模型互不影响；个数不限。</string>
+    <string name="add_provider">+ 添加供应商</string>
+    <string name="edit_provider">编辑供应商</string>
+    <string name="provider_name">名称（如 DeepSeek 官转）</string>
+    <string name="base_url_hint">中转站地址（https://…/v1）</string>
+    <string name="api_key">API Key</string>
+    <string name="provider_not_configured">未配置地址或 Key（点击编辑）</string>
+    <string name="provider_no_key">未填写 Key</string>
+    <string name="provider_models_format">模型 %1$d</string>
+    <string name="fetch_provider_models">拉取模型</string>
+    <string name="fetching_models">正在拉取模型…</string>
+    <string name="models_fetched_format">已拉取 %1$d 个模型</string>
+    <string name="fetch_failed_format">拉取失败：%1$s</string>
+    <string name="delete_provider_confirm">确定删除供应商「%1$s」？其模型列表也会一并移除。</string>
+    <string name="no_models_hint">暂无模型，请先在设置中添加供应商并拉取模型</string>
+
+    <!-- 按钮排序 -->
+    <string name="tool_drag_hint">长按并拖到另一个按钮上即可换位</string>
 </resources>

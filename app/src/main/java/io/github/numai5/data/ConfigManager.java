@@ -2,19 +2,31 @@ package io.github.numai5.data;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import com.google.gson.Gson;
+import com.google.gson.reflect.TypeToken;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.UUID;
 import io.github.numai5.model.Config;
+import io.github.numai5.provider.ModelDef;
+import io.github.numai5.provider.PresetModels;
+import io.github.numai5.provider.Provider;
 
 /**
- * 配置管理（C 类修复：主线程用 apply() 而非 commit()）。
+ * 配置管理（apply() 而非 commit()）。
+ * 多供应商：providers 以 JSON 字符串存入 SharedPreferences；旧版单供应商字段首次读取时自动迁移。
  */
 public class ConfigManager {
     private static final String PREFS_NAME = "numai5_config";
-    private static final String KEY_BASE_URL = "baseUrl";
-    private static final String KEY_API_KEY = "apiKey";
+    private static final String KEY_PROVIDERS = "providersJson";
     private static final String KEY_DEFAULT_MODEL = "defaultModelId";
     private static final String KEY_SYSTEM_PROMPT = "systemPrompt";
     private static final String KEY_SHRINK_THINK = "shrinkThink";
     private static final String KEY_NEWAPI_DIALECT = "newapiDialect";
+    private static final String KEY_TOOL_ORDER = "toolOrder";
+    // 旧版字段（仅用于一次性迁移）
+    private static final String KEY_OLD_BASE_URL = "baseUrl";
+    private static final String KEY_OLD_API_KEY = "apiKey";
 
     private static ConfigManager instance;
     private final SharedPreferences preferences;
@@ -39,21 +51,50 @@ public class ConfigManager {
         return instance;
     }
 
+    private Gson gson() {
+        return new Gson();
+    }
+
     private Config loadConfig() {
         Config c = new Config();
-        c.baseUrl = preferences.getString(KEY_BASE_URL, "");
-        c.apiKey = preferences.getString(KEY_API_KEY, "");
+
+        String json = preferences.getString(KEY_PROVIDERS, null);
+        if (json != null && json.length() > 0) {
+            try {
+                List<Provider> list = gson().fromJson(json, new TypeToken<List<Provider>>() {}.getType());
+                if (list != null) c.providers = list;
+            } catch (Exception ignored) {
+            }
+        } else {
+            // 迁移旧版单供应商配置
+            String baseUrl = preferences.getString(KEY_OLD_BASE_URL, "");
+            String apiKey = preferences.getString(KEY_OLD_API_KEY, "");
+            if ((baseUrl != null && baseUrl.length() > 0) || (apiKey != null && apiKey.length() > 0)) {
+                Provider p = new Provider("p1", "默认供应商");
+                p.baseUrl = baseUrl == null ? "" : baseUrl;
+                p.apiKey = apiKey == null ? "" : apiKey;
+                c.providers.add(p);
+            }
+        }
+
+        // 首次启动：预置常见供应商（地址与 Key 留空，由用户填写）
+        if (c.providers.isEmpty()) {
+            c.providers.addAll(PresetModels.createDefaultProviders());
+        }
+        for (Provider p : c.providers) {
+            if (p.models == null) p.models = new ArrayList<>();
+        }
+
         c.defaultModelId = preferences.getString(KEY_DEFAULT_MODEL, "");
         c.systemPrompt = preferences.getString(KEY_SYSTEM_PROMPT, "");
         c.shrinkThink = preferences.getBoolean(KEY_SHRINK_THINK, false);
-        c.newapiDialect = preferences.getBoolean(KEY_NEWAPI_DIALECT, true); // 步骤5：默认按 NewAPI 方言
+        c.newapiDialect = preferences.getBoolean(KEY_NEWAPI_DIALECT, true);
         return c;
     }
 
     private void save() {
         SharedPreferences.Editor editor = preferences.edit();
-        editor.putString(KEY_BASE_URL, config.baseUrl == null ? "" : config.baseUrl);
-        editor.putString(KEY_API_KEY, config.apiKey == null ? "" : config.apiKey);
+        editor.putString(KEY_PROVIDERS, gson().toJson(config.providers));
         editor.putString(KEY_DEFAULT_MODEL, config.defaultModelId == null ? "" : config.defaultModelId);
         editor.putString(KEY_SYSTEM_PROMPT, config.systemPrompt == null ? "" : config.systemPrompt);
         editor.putBoolean(KEY_SHRINK_THINK, config.shrinkThink);
@@ -69,15 +110,119 @@ public class ConfigManager {
         return config.isValid();
     }
 
-    /** 步骤9：拉取模型只需要中转地址与 Key */
     public boolean isValidForFetch() {
         return config.isValidForFetch();
     }
 
-    public void updateBaseUrl(String v) { config.baseUrl = v; save(); }
-    public void updateApiKey(String v) { config.apiKey = v; save(); }
-    public void updateDefaultModel(String v) { config.defaultModelId = v; save(); }
-    public void updateSystemPrompt(String v) { config.systemPrompt = v; save(); }
+    // ===== 供应商 =====
+
+    public List<Provider> getProviders() {
+        return config.providers;
+    }
+
+    public Provider findProvider(String id) {
+        if (id == null) return null;
+        for (Provider p : config.providers) {
+            if (id.equals(p.id)) return p;
+        }
+        return null;
+    }
+
+    /** 模型所属供应商（发送时据此取地址与 Key） */
+    public Provider findProviderOfModel(String modelId) {
+        if (modelId == null) return null;
+        for (Provider p : config.providers) {
+            for (ModelDef m : p.models) {
+                if (modelId.equals(m.id)) return p;
+            }
+        }
+        return null;
+    }
+
+    public ModelDef findModel(String modelId) {
+        if (modelId == null) return null;
+        for (Provider p : config.providers) {
+            for (ModelDef m : p.models) {
+                if (modelId.equals(m.id)) return m;
+            }
+        }
+        return null;
+    }
+
+    /** 新增供应商（自动分配 id） */
+    public Provider addProvider() {
+        Provider p = new Provider("p" + UUID.randomUUID().toString().substring(0, 8), "新供应商");
+        config.providers.add(p);
+        save();
+        return p;
+    }
+
+    public void removeProvider(String id) {
+        Provider p = findProvider(id);
+        if (p == null) return;
+        config.providers.remove(p);
+        // 默认模型属于被删供应商时清空
+        if (config.defaultModelId != null && p.models != null) {
+            for (ModelDef m : p.models) {
+                if (config.defaultModelId.equals(m.id)) {
+                    config.defaultModelId = "";
+                    break;
+                }
+            }
+        }
+        save();
+    }
+
+    public void updateProvider(String id, String name, String baseUrl, String apiKey) {
+        Provider p = findProvider(id);
+        if (p == null) return;
+        p.name = name == null ? "" : name.trim();
+        p.baseUrl = baseUrl == null ? "" : baseUrl.trim();
+        p.apiKey = apiKey == null ? "" : apiKey.trim();
+        save();
+    }
+
+    /** 合并 /models 拉取结果到指定供应商（保留已有模型的能力开关，补充新模型） */
+    public void mergeModels(String providerId, List<ModelDef> fetched) {
+        Provider provider = findProvider(providerId);
+        if (provider == null || fetched == null) return;
+        for (ModelDef incoming : fetched) {
+            ModelDef existing = null;
+            for (ModelDef m : provider.models) {
+                if (m.id != null && m.id.equals(incoming.id)) {
+                    existing = m;
+                    break;
+                }
+            }
+            if (existing != null) {
+                existing.rawId = incoming.rawId;
+                if (incoming.id != null) existing.id = incoming.id;
+            } else {
+                provider.models.add(incoming);
+            }
+        }
+        save();
+    }
+
+    // ===== 其他设置 =====
+
+    public void updateDefaultModel(String v) { config.defaultModelId = v == null ? "" : v; save(); }
+    public void updateSystemPrompt(String v) { config.systemPrompt = v == null ? "" : v; save(); }
     public void updateShrinkThink(boolean v) { config.shrinkThink = v; save(); }
     public void updateNewapiDialect(boolean v) { config.newapiDialect = v; save(); }
+
+    /** 供设置页批量保存后统一刷新 */
+    public void refresh() {
+        save();
+    }
+
+    // ===== 输入栏按钮顺序（步骤：按钮可拖动排序） =====
+
+    public String getToolOrder() {
+        return preferences.getString(KEY_TOOL_ORDER, "");
+    }
+
+    public void updateToolOrder(String order) {
+        preferences.edit().putString(KEY_TOOL_ORDER, order == null ? "" : order).apply();
+    }
 }

@@ -29,6 +29,7 @@ import io.github.numai5.model.Role;
 import io.github.numai5.model.ThinkingLevel;
 import io.github.numai5.provider.ModelCatalog;
 import io.github.numai5.provider.ModelDef;
+import io.github.numai5.provider.Provider;
 import io.github.numai5.thinking.ThinkingMapper;
 import okhttp3.Call;
 import okhttp3.MediaType;
@@ -96,7 +97,17 @@ public class ApiService {
                                   Message assistantMsg, ApiCallback<ChatCompletionResult> callback,
                                   int reasoningRetries, boolean maxRetryUsed) {
         Config config = configManager.getConfig();
-        String baseUrl = trimSlash(config.baseUrl);
+        Provider provider = ModelCatalog.getInstance().findProviderOfModel(model.id);
+        if (provider == null) {
+            postError(callback, new ApiError("未找到模型所属的供应商，请到设置中检查"));
+            return;
+        }
+        if (!provider.isValidForFetch()) {
+            postError(callback, new ApiError("供应商「" + provider.displayName() + "」未配置中转地址或 Key"));
+            return;
+        }
+        String baseUrl = provider.normalizedBaseUrl();
+        String apiKey = provider.apiKey;
         String modelId = model.requestId(); // 步骤8：优先使用 /models 返回的原始 id
 
         if (cancelled) {
@@ -159,7 +170,7 @@ public class ApiService {
 
             Request request = new Request.Builder()
                     .url(baseUrl + "/chat/completions")
-                    .header("Authorization", "Bearer " + config.apiKey)
+                    .header("Authorization", "Bearer " + apiKey)
                     .header("Content-Type", "application/json")
                     .post(RequestBody.create(payload.toString(), JSON))
                     .build();
@@ -558,12 +569,16 @@ public class ApiService {
         return stc;
     }
 
-    public void getModels(ApiCallback<List<ModelDef>> callback) {
+    /** 拉取指定供应商的模型列表，并合并进该供应商（其余供应商不受影响） */
+    public void getModels(Provider provider, ApiCallback<List<ModelDef>> callback) {
+        if (provider == null) {
+            postError(callback, new ApiError("未指定供应商"));
+            return;
+        }
         new Thread(() -> {
-            Config config = configManager.getConfig();
             try {
                 ApiRequest request = new ApiRequest("/models", "GET")
-                        .setCredentials(trimSlash(config.baseUrl), config.apiKey);
+                        .setCredentials(provider.normalizedBaseUrl(), provider.apiKey);
                 ApiResponse response = apiClient.execute(request);
                 if (!response.successful) {
                     postError(callback, new ApiError(response.errorBody));
@@ -571,8 +586,9 @@ public class ApiService {
                 }
                 JsonObject obj = JsonParser.parseString(response.body).getAsJsonObject();
                 JsonArray data = obj.getAsJsonArray("data");
-                ModelCatalog.getInstance().mergeFromModelsEndpoint(data);
-                postSuccess(callback, ModelCatalog.getInstance().getAllModels());
+                List<ModelDef> models = ModelCatalog.getInstance().parseModelsEndpoint(data, provider.id);
+                ConfigManager.getInstance().mergeModels(provider.id, models);
+                postSuccess(callback, models);
             } catch (ApiError e) {
                 postError(callback, e);
             } catch (Exception e) {

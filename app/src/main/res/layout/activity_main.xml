@@ -21,7 +21,9 @@
         android:background="#FFFFFFFF"
         android:padding="6dp">
 
+        <!-- 工具行：可拖动排序的按钮容器 -->
         <LinearLayout
+            android:id="@+id/toolBar"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="horizontal"
@@ -42,30 +44,24 @@
                 android:minWidth="0dp"
                 android:paddingStart="10dp"
                 android:paddingEnd="10dp"
-                android:text="🧠 Default"
+                android:text="@string/thinking_default_label"
                 android:textSize="12sp" />
 
             <Button
                 android:id="@+id/btnModel"
-                android:layout_width="wrap_content"
+                android:layout_width="0dp"
                 android:layout_height="36dp"
+                android:layout_weight="1"
                 android:minWidth="0dp"
                 android:paddingStart="10dp"
                 android:paddingEnd="10dp"
-                android:text="A · deepseek-v4-flash"
+                android:text="@string/model_not_selected"
                 android:textSize="12sp"
                 android:ellipsize="end"
                 android:maxLines="1" />
-
-            <ImageButton
-                android:id="@+id/btnSend"
-                android:layout_width="36dp"
-                android:layout_height="36dp"
-                android:background="?android:attr/selectableItemBackground"
-                android:contentDescription="@string/send"
-                android:src="@android:drawable/ic_menu_send" />
         </LinearLayout>
 
+        <!-- 输入行：附件计数 + 输入框 + 发送键（发送键固定在右侧，始终可见） -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -93,6 +89,16 @@
                 android:imeOptions="actionSend"
                 android:inputType="textMultiLine|textCapSentences"
                 android:maxLines="4" />
+
+            <ImageButton
+                android:id="@+id/btnSend"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:layout_marginStart="4dp"
+                android:background="?android:attr/selectableItemBackground"
+                android:contentDescription="@string/send"
+                android:scaleType="centerInside"
+                android:src="@android:drawable/ic_menu_send" />
         </LinearLayout>
     </LinearLayout>
 </LinearLayout>

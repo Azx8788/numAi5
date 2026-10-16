@@ -4,55 +4,46 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 预设 A/B/C 三家主流模型（基于 2026 当前可用模型）。
- * 中转站 model id 可能带前缀（如 anthropic/claude-...），由 ModelCatalog 剥前缀后匹配。
+ * 首次启动预置的供应商与模型（地址/Key 留空，模型列表可被 /models 拉取结果补充）。
+ * 用户也可在设置页新增任意多个供应商。
  */
 public class PresetModels {
 
-    public static List<Provider> getPresetProviders() {
+    public static List<Provider> createDefaultProviders() {
         List<Provider> list = new ArrayList<>();
-        list.add(new Provider("A", "DeepSeek"));
-        list.add(new Provider("B", "Claude & GPT"));
-        list.add(new Provider("C", "Qwen"));
-        return list;
-    }
 
-    public static List<ModelDef> getPresetModels() {
-        List<ModelDef> list = new ArrayList<>();
+        Provider deepseek = new Provider("p1", "DeepSeek");
+        deepseek.models.add(new ModelDef("deepseek-v4-pro", "DeepSeek V4 Pro", "p1", true, false)
+                .tools(true).keepReasoning(true));
+        deepseek.models.add(new ModelDef("deepseek-v4-flash", "DeepSeek V4 Flash", "p1", true, false)
+                .tools(true).keepReasoning(true));
+        deepseek.models.add(new ModelDef("deepseek-v4-flash-vision-exp", "DeepSeek V4 Flash Vision", "p1", true, true)
+                .tools(true).keepReasoning(true));
+        list.add(deepseek);
 
-        // === A: DeepSeek ===
-        // DeepSeek V4 是 hybrid thinking 模型，支持 tools，多轮需回传 reasoning_content（A1）
-        list.add(new ModelDef("deepseek-v4-pro", "DeepSeek V4 Pro", "A", true, false)
-                .tools(true).keepReasoning(true));
-        list.add(new ModelDef("deepseek-v4-flash", "DeepSeek V4 Flash", "A", true, false)
-                .tools(true).keepReasoning(true));
-        list.add(new ModelDef("deepseek-v4-flash-vision-exp", "DeepSeek V4 Flash Vision", "A", true, true)
-                .tools(true).keepReasoning(true));
-
-        // === B: Claude & GPT ===
-        // Claude 经中转用 reasoning_effort，历史不回传 reasoning
-        list.add(new ModelDef("claude-sonnet-4-6", "Claude Sonnet 4.6", "B", true, true)
+        Provider claudeGpt = new Provider("p2", "Claude & GPT");
+        claudeGpt.models.add(new ModelDef("claude-sonnet-4-6", "Claude Sonnet 4.6", "p2", true, true)
                 .tools(true));
-        list.add(new ModelDef("claude-opus-4-8", "Claude Opus 4.8", "B", true, true)
+        claudeGpt.models.add(new ModelDef("claude-opus-4-8", "Claude Opus 4.8", "p2", true, true)
                 .tools(true));
-        list.add(new ModelDef("gpt-4o", "GPT-4o", "B", false, true)
+        claudeGpt.models.add(new ModelDef("gpt-4o", "GPT-4o", "p2", false, true)
                 .tools(true));
-        list.add(new ModelDef("gpt-5-chat", "GPT-5 Chat", "B", false, false)
+        claudeGpt.models.add(new ModelDef("gpt-5-chat", "GPT-5 Chat", "p2", false, false)
                 .tools(true));
-        // gpt-5.4 是 reasoning 模型，用 max_completion_tokens，不接受 temperature（A4）
-        list.add(new ModelDef("gpt-5.4", "GPT-5.4", "B", true, false)
+        claudeGpt.models.add(new ModelDef("gpt-5.4", "GPT-5.4", "p2", true, false)
                 .tools(true).maxCompletion(true).reasoningOnly(true));
+        list.add(claudeGpt);
 
-        // === C: Qwen ===
-        list.add(new ModelDef("qwen3.5-plus", "Qwen 3.5 Plus", "C", true, false)
+        Provider qwen = new Provider("p3", "Qwen");
+        qwen.models.add(new ModelDef("qwen3.5-plus", "Qwen 3.5 Plus", "p3", true, false)
                 .tools(true));
-        list.add(new ModelDef("qwen3.5-flash", "Qwen 3.5 Flash", "C", true, true)
+        qwen.models.add(new ModelDef("qwen3.5-flash", "Qwen 3.5 Flash", "p3", true, true)
                 .tools(true));
-        // qwq-32b 纯推理模型，不支持 function calling
-        list.add(new ModelDef("qwq-32b", "Qwen QwQ 32B", "C", true, false)
+        qwen.models.add(new ModelDef("qwq-32b", "Qwen QwQ 32B", "p3", true, false)
                 .tools(false).reasoningOnly(true));
-        list.add(new ModelDef("qwen3-vl-235b", "Qwen 3 VL 235B", "C", true, true)
+        qwen.models.add(new ModelDef("qwen3-vl-235b", "Qwen 3 VL 235B", "p3", true, true)
                 .tools(true));
+        list.add(qwen);
 
         return list;
     }

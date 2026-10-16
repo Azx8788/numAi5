@@ -12,29 +12,36 @@
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="@string/base_url"
+            android:text="@string/provider_list"
             android:textStyle="bold" />
-
-        <EditText
-            android:id="@+id/editBaseUrl"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:hint="https://api.example.com/v1"
-            android:inputType="textUri" />
 
         <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
-            android:text="@string/api_key"
-            android:textStyle="bold" />
-
-        <EditText
-            android:id="@+id/editApiKey"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:hint="sk-..."
-            android:inputType="textPassword" />
+            android:layout_marginTop="2dp"
+            android:text="@string/provider_hint"
+            android:textColor="@color/text_meta"
+            android:textSize="11sp" />
+
+        <LinearLayout
+            android:id="@+id/providerList"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:orientation="vertical" />
+
+        <Button
+            android:id="@+id/btnAddProvider"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:text="@string/add_provider" />
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:layout_marginTop="16dp"
+            android:background="#22000000" />
 
         <TextView
             android:layout_width="wrap_content"
@@ -47,7 +54,7 @@
             android:id="@+id/btnDefaultModel"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="未选择" />
+            android:text="@string/model_not_selected" />
 
         <TextView
             android:layout_width="wrap_content"
@@ -60,7 +67,7 @@
             android:id="@+id/editSystemPrompt"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:hint="你是一个有用的助手"
+            android:hint="@string/system_prompt_hint"
             android:inputType="textMultiLine"
             android:minLines="2" />
 
@@ -72,17 +79,10 @@
             android:text="@string/newapi_dialect" />
 
         <Button
-            android:id="@+id/btnFetchModels"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:text="@string/fetch_models" />
-
-        <Button
             android:id="@+id/btnSave"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
+            android:layout_marginTop="16dp"
             android:text="@string/save" />
     </LinearLayout>
 </ScrollView>

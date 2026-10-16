@@ -13,13 +13,13 @@ import java.util.ArrayList;
 import java.util.List;
 import io.github.numai5.R;
 import io.github.numai5.data.ConfigManager;
-import io.github.numai5.provider.ModelCatalog;
 import io.github.numai5.provider.ModelDef;
+import io.github.numai5.provider.ModelCatalog;
 import io.github.numai5.provider.Provider;
 
 /**
- * 模型选择器 BottomSheet：按供应商分组展示，每模型显示能力图标。
- * 默认模型带「默认」徽标（用户规格的 UI 要求）。
+ * 模型选择器 BottomSheet：按供应商分组展示（不限供应商个数），每模型显示能力图标。
+ * 默认模型带「默认」徽标。
  */
 public class ModelSelectorSheet extends BottomSheetDialogFragment {
 
@@ -28,7 +28,6 @@ public class ModelSelectorSheet extends BottomSheetDialogFragment {
     }
 
     private OnModelSelectedListener listener;
-    private List<Provider> providers = new ArrayList<>();
     private List<Object> items = new ArrayList<>(); // String(section) 或 ModelDef
 
     public void setListener(OnModelSelectedListener l) {
@@ -41,16 +40,19 @@ public class ModelSelectorSheet extends BottomSheetDialogFragment {
         RecyclerView list = view.findViewById(R.id.modelsList);
         list.setLayoutManager(new LinearLayoutManager(getContext()));
 
-        providers = ModelCatalog.getInstance().getProviders();
         String defaultModelId = ConfigManager.getInstance(getContext()).getConfig().defaultModelId;
 
-        // 构建分组数据
+        // 按供应商分组（每个供应商一个分组标题）
         items.clear();
+        List<Provider> providers = ModelCatalog.getInstance().getProviders();
         for (Provider p : providers) {
             List<ModelDef> models = ModelCatalog.getInstance().getModelsByProvider(p.id);
             if (models.isEmpty()) continue;
-            items.add(p.name); // section header
-            for (ModelDef m : models) items.add(m);
+            items.add(p.displayName());
+            items.addAll(models);
+        }
+        if (items.isEmpty()) {
+            items.add(getString(R.string.no_models_hint));
         }
 
         list.setAdapter(new ModelAdapter(items, defaultModelId));
@@ -82,8 +84,10 @@ public class ModelSelectorSheet extends BottomSheetDialogFragment {
                 TextView tv = new TextView(parent.getContext());
                 tv.setLayoutParams(new RecyclerView.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-                tv.setPadding(16, 12, 16, 4);
-                tv.setTextAppearance(android.R.style.TextAppearance_DeviceDefault_Small);
+                tv.setPadding(16, 16, 16, 4);
+                tv.setTextSize(12f);
+                tv.setTextColor(0xFF888888);
+                tv.setTypeface(tv.getTypeface(), android.graphics.Typeface.BOLD);
                 return new SectionVH(tv);
             }
             return new ModelVH(inflater.inflate(R.layout.item_model, parent, false));
