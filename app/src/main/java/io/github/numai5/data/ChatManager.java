@@ -78,6 +78,23 @@ public class ChatManager {
         return new ArrayList<>(chats);
     }
 
+    /** 备份恢复：整体替换全部聊天记录 */
+    public void replaceAll(List<Chat> newChats) {
+        chats.clear();
+        if (newChats != null) {
+            for (Chat c : newChats) {
+                if (c.messages == null) c.messages = new ArrayList<>();
+                if (c.id == null || c.id.length() == 0) c.id = UUID.randomUUID().toString();
+                chats.add(c);
+            }
+        }
+        currentChat = chats.isEmpty() ? null : chats.get(0);
+        if (currentChat == null) {
+            startNewChat();
+        }
+        saveAll();
+    }
+
     public List<Chat> getSortedChats() {
         List<Chat> sorted = new ArrayList<>(chats);
         Collections.sort(sorted, new Comparator<Chat>() {

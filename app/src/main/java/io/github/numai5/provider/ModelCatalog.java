@@ -145,5 +145,25 @@ public class ModelCatalog {
                 lower.contains("qwq")) {
             m.isReasoningOnly = true;
         }
+
+        // 图像生成模型（生图入口只列这些）
+        if (lower.contains("dall-e") || lower.contains("gpt-image") || lower.contains("imagen")
+                || lower.contains("flux") || lower.contains("stable-diffusion")
+                || lower.contains("sdxl") || lower.contains("midjourney")
+                || lower.contains("seedream") || lower.contains("kolors")
+                || lower.contains("cogview") || lower.contains("wanx")
+                || lower.contains("hunyuan-image") || lower.contains("qwen-image")
+                || lower.contains("imagegen") || lower.contains("image-gen")) {
+            m.supportsImageGen = true;
+        }
+    }
+
+    /** 汇总所有供应商中的生图模型 */
+    public List<ModelDef> getImageGenModels() {
+        List<ModelDef> list = new ArrayList<>();
+        for (ModelDef m : getAllModels()) {
+            if (m.supportsImageGen) list.add(m);
+        }
+        return list;
     }
 }

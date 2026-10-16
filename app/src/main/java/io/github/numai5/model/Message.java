@@ -30,6 +30,9 @@ public class Message {
     public String thinkingLevel;       // ThinkingLevel.name()
     public List<String> inputImages;   // 存本地图片文件名（A6）
 
+    /** 生图结果：本地图片文件名（与 inputImages 同样只存文件名，不持久化 base64） */
+    public List<String> generatedImages;
+
     // 流式缓冲（不持久化）
     public transient StringBuilder thinkingBuffer;
     public transient StringBuilder contentBuffer;

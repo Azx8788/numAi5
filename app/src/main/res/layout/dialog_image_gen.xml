@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="20dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/imagegen_model"
+            android:textStyle="bold" />
+
+        <Button
+            android:id="@+id/btnImageGenModel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/model_not_selected" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:text="@string/imagegen_size"
+            android:textStyle="bold" />
+
+        <Button
+            android:id="@+id/btnImageGenSize"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/imagegen_size_default" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:text="@string/imagegen_prompt"
+            android:textStyle="bold" />
+
+        <EditText
+            android:id="@+id/editImageGenPrompt"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="@string/imagegen_prompt_hint"
+            android:inputType="textMultiLine|textCapSentences"
+            android:minLines="3" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="@string/imagegen_background_hint"
+            android:textColor="@color/text_meta"
+            android:textSize="11sp" />
+    </LinearLayout>
+</ScrollView>

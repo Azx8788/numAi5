@@ -1,19 +1,25 @@
 package io.github.numai5.ui;
 
+import android.content.Context;
+import android.graphics.Bitmap;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.ImageView;
+import android.widget.LinearLayout;
 import android.widget.TextView;
 import androidx.annotation.NonNull;
 import androidx.recyclerview.widget.RecyclerView;
+import java.io.File;
 import java.util.List;
 import io.github.numai5.R;
 import io.github.numai5.model.Message;
 import io.github.numai5.model.Role;
 import io.github.numai5.model.ThinkingLevel;
+import io.github.numai5.vision.ImageCompressor;
 
 /**
- * 消息列表 Adapter。assistant 气泡显示：思考过程（可折叠）+ 正文 + 模型/供应商/等级标注。
+ * 消息列表 Adapter。assistant 气泡显示：思考过程（可折叠）+ 正文 + 生图结果 + 模型/供应商/等级标注。
  * user 气泡右对齐显示内容 + [图片] 占位。
  */
 public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
@@ -21,6 +27,8 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
     private static final int TYPE_USER = 0;
     private static final int TYPE_ASSISTANT = 1;
     private static final int TYPE_TOOL = 2;
+    /** 气泡内图片显式最大边长（px 级采样目标） */
+    private static final int IMAGE_MAX_SIZE = 720;
 
     private List<Message> messages;
 
@@ -84,6 +92,7 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
         TextView thinkingContent;
         TextView contentText;
         TextView metaText;
+        LinearLayout imageContainer;
         boolean thinkingCollapsed = false;
 
         AssistantViewHolder(View v) {
@@ -93,16 +102,19 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
             thinkingContent = v.findViewById(R.id.thinkingContent);
             contentText = v.findViewById(R.id.contentText);
             metaText = v.findViewById(R.id.metaText);
+            imageContainer = v.findViewById(R.id.imageContainer);
         }
 
         void bind(Message msg) {
+            Context context = itemView.getContext();
+
             // 思考过程
             String thinking = msg.getThinkingRaw();
             if (thinking != null && thinking.length() > 0) {
                 thinkingContainer.setVisibility(View.VISIBLE);
                 thinkingLabel.setText(thinkingCollapsed ? "▶ 思考过程" : "▼ 思考过程");
                 thinkingContent.setVisibility(thinkingCollapsed ? View.GONE : View.VISIBLE);
-                thinkingContent.setText(MarkdownParser.parse(itemView.getContext(), thinking, false));
+                thinkingContent.setText(MarkdownParser.parse(context, thinking, false));
                 thinkingLabel.setOnClickListener(v -> {
                     thinkingCollapsed = !thinkingCollapsed;
                     thinkingLabel.setText(thinkingCollapsed ? "▶ 思考过程" : "▼ 思考过程");
@@ -115,11 +127,15 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
             // 正文
             String display = msg.getDisplayRaw();
             if (display == null || display.length() == 0) display = msg.content == null ? "" : msg.content;
-            contentText.setText(MarkdownParser.parse(itemView.getContext(), display, false));
+            contentText.setText(MarkdownParser.parse(context, display, false));
 
-            // 错误标记（B4 断流）
+            // 生图结果
+            bindGeneratedImages(context, msg);
+
+            // 错误标记（B4 断流 / 生图失败）
             if (msg.isError) {
                 metaText.setText("⚠ 生成中断");
+                metaText.setVisibility(View.VISIBLE);
             } else {
                 StringBuilder meta = new StringBuilder();
                 if (msg.provider != null) {
@@ -130,6 +146,33 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
                     meta.append(" · ").append(ThinkingLevel.fromName(msg.thinkingLevel).getDisplay());
                 }
                 metaText.setText(meta.toString());
+            }
+        }
+
+        private void bindGeneratedImages(Context context, Message msg) {
+            imageContainer.removeAllViews();
+            if (msg.generatedImages == null || msg.generatedImages.isEmpty()) {
+                imageContainer.setVisibility(View.GONE);
+                return;
+            }
+            imageContainer.setVisibility(View.VISIBLE);
+            int size = (int) (context.getResources().getDisplayMetrics().density * 8);
+            for (String filename : msg.generatedImages) {
+                File file = ImageCompressor.imageFile(context, filename);
+                Bitmap bitmap = ImageLoader.load(file, IMAGE_MAX_SIZE);
+                if (bitmap == null) continue;
+                ImageView imageView = new ImageView(context);
+                imageView.setImageBitmap(bitmap);
+                imageView.setAdjustViewBounds(true);
+                imageView.setScaleType(ImageView.ScaleType.FIT_CENTER);
+                LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+                params.topMargin = size / 2;
+                imageView.setLayoutParams(params);
+                imageContainer.addView(imageView);
+            }
+            if (imageContainer.getChildCount() == 0) {
+                imageContainer.setVisibility(View.GONE);
             }
         }
     }

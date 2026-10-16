@@ -64,4 +64,23 @@ public class ImageCompressor {
         int newH = Math.round(h * scale);
         return Bitmap.createScaledBitmap(src, newW, newH, true);
     }
+
+    /** 生图结果落盘（PNG，保真不二次有损压缩）；返回文件名 */
+    public static String saveGeneratedImage(Context context, byte[] data) {
+        if (data == null || data.length == 0) return null;
+        String filename = "gen_" + java.util.UUID.randomUUID().toString() + ".png";
+        File out = new File(getImagesDir(context), filename);
+        try (FileOutputStream fos = new FileOutputStream(out)) {
+            fos.write(data);
+            return filename;
+        } catch (IOException e) {
+            Log.e(TAG, "save generated image failed", e);
+            return null;
+        }
+    }
+
+    public static File imageFile(Context context, String filename) {
+        if (filename == null) return null;
+        return new File(getImagesDir(context), filename);
+    }
 }

@@ -8,6 +8,7 @@ import android.os.Looper;
 import android.view.DragEvent;
 import android.view.Menu;
 import android.view.MenuItem;
+import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.inputmethod.EditorInfo;
@@ -28,6 +29,7 @@ import io.github.numai5.api.ApiError;
 import io.github.numai5.api.ApiService;
 import io.github.numai5.data.ChatManager;
 import io.github.numai5.data.ConfigManager;
+import io.github.numai5.data.ImageGenManager;
 import io.github.numai5.data.MessageManager;
 import io.github.numai5.data.StreamSession;
 import io.github.numai5.model.Chat;
@@ -48,7 +50,7 @@ import io.github.numai5.vision.ImagePicker;
  * 流式刷新：每 200ms 轮询 assistantMsg.streamRev，有变化才重绘。
  * 生命周期：旋转等重建由进程级 StreamSession 保留执行状态；进程被杀不伪装仍在生成。
  */
-public class MainActivity extends AppCompatActivity implements StreamSession.Listener {
+public class MainActivity extends AppCompatActivity implements StreamSession.Listener, ImageGenManager.Listener {
 
     private static final String STATE_CHAT_ID = "chatId";
     private static final String STATE_PENDING_MODEL = "pendingModelId";
@@ -91,6 +93,10 @@ public class MainActivity extends AppCompatActivity implements StreamSession.Lis
     private ThinkingLevel pendingLevel = ThinkingLevel.DEFAULT;
     private final List<String> pendingImages = new ArrayList<>();
 
+    /** 生图（AI 绘图）对话框状态 */
+    private io.github.numai5.provider.ModelDef imageGenModel;
+    private String imageGenSize = "1024x1024";
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -122,6 +128,12 @@ public class MainActivity extends AppCompatActivity implements StreamSession.Lis
         // 旋转等重建后请求仍在进行：恢复轮询（进程被杀后 StreamSession 随进程消失，不会误恢复）
         if (streamSession.isGenerating() && streamSession.getActiveMsg() != null) {
             startPolling();
+        }
+
+        // 上次进程被系统回收时若有未完成的生图任务，标记为中断，避免状态卡住
+        ImageGenManager imageGenManager = ImageGenManager.getInstance(this);
+        if (imageGenManager.hasStaleTask()) {
+            imageGenManager.discardStaleTask();
         }
     }
 
@@ -346,6 +358,121 @@ public class MainActivity extends AppCompatActivity implements StreamSession.Lis
         }
     }
 
+    /** 刷新列表最后一条（流式结束 / 生图完成共用） */
+    private void refreshLastItem() {
+        int count = adapter.getItemCount();
+        if (count > 0) {
+            adapter.notifyItemChanged(count - 1);
+            messageList.scrollToPosition(count - 1);
+        }
+    }
+
+    // ===== 生图（AI 绘图）=====
+
+    private void showImageGenDialog() {
+        final List<ModelDef> models = ModelCatalog.getInstance().getImageGenModels();
+        if (models.isEmpty()) {
+            toast(getString(R.string.imagegen_no_model));
+            return;
+        }
+        if (ImageGenManager.getInstance(this).isRunning()) {
+            toast(getString(R.string.imagegen_busy));
+            return;
+        }
+
+        View content = LayoutInflater.from(this).inflate(R.layout.dialog_image_gen, null, false);
+        final Button btnModel = content.findViewById(R.id.btnImageGenModel);
+        final Button btnSize = content.findViewById(R.id.btnImageGenSize);
+        final EditText editPrompt = content.findViewById(R.id.editImageGenPrompt);
+
+        if (imageGenModel == null || !containsModel(models, imageGenModel.id)) {
+            imageGenModel = models.get(0);
+        }
+        btnModel.setText(imageGenModel.displayName);
+        btnSize.setText(imageGenSize);
+
+        btnModel.setOnClickListener(v -> {
+            String[] labels = new String[models.size()];
+            for (int i = 0; i < models.size(); i++) {
+                ModelDef m = models.get(i);
+                Provider p = ModelCatalog.getInstance().findProviderOfModel(m.id);
+                labels[i] = (p != null ? p.displayName() + " · " : "") + m.displayName;
+            }
+            new AlertDialog.Builder(this)
+                    .setTitle(R.string.imagegen_model)
+                    .setItems(labels, (d, which) -> {
+                        imageGenModel = models.get(which);
+                        btnModel.setText(imageGenModel.displayName);
+                    })
+                    .show();
+        });
+        btnSize.setOnClickListener(v -> {
+            final String[] sizes = getResources().getStringArray(R.array.imagegen_sizes);
+            new AlertDialog.Builder(this)
+                    .setTitle(R.string.imagegen_size)
+                    .setItems(sizes, (d, which) -> {
+                        imageGenSize = sizes[which];
+                        btnSize.setText(imageGenSize);
+                    })
+                    .show();
+        });
+
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.ai_image_gen)
+                .setView(content)
+                .setPositiveButton(R.string.imagegen_start, (d, which) ->
+                        submitImageGen(editPrompt.getText().toString().trim()))
+                .setNegativeButton(R.string.cancel, null)
+                .show();
+    }
+
+    private boolean containsModel(List<ModelDef> models, String id) {
+        for (ModelDef m : models) {
+            if (m.id != null && m.id.equals(id)) return true;
+        }
+        return false;
+    }
+
+    private void submitImageGen(String prompt) {
+        if (prompt == null || prompt.length() == 0) {
+            toast(getString(R.string.imagegen_prompt_empty));
+            return;
+        }
+        if (imageGenModel == null) {
+            toast(getString(R.string.imagegen_no_model));
+            return;
+        }
+        Provider provider = ModelCatalog.getInstance().findProviderOfModel(imageGenModel.id);
+        if (provider == null || !provider.isValidForFetch()) {
+            toast(getString(R.string.imagegen_provider_invalid));
+            return;
+        }
+        Chat chat = chatManager.getCurrentChat();
+        if (chat == null) return;
+
+        String messageId = ImageGenManager.getInstance(this)
+                .submit(this, chat, provider, imageGenModel, prompt, imageGenSize, 1);
+        if (messageId == null) {
+            toast(getString(R.string.imagegen_busy));
+            return;
+        }
+        int index = chat.messages.size() - 1;
+        adapter.notifyItemInserted(index);
+        scrollToBottom();
+        toast(getString(R.string.imagegen_started));
+    }
+
+    @Override
+    public void onImageGenFinished(String messageId, boolean success, String detail) {
+        refreshLastItem();
+        if (success) {
+            toast(getString(R.string.imagegen_done));
+        } else {
+            toast(getString(R.string.imagegen_failed_format,
+                    detail != null ? detail : ""));
+        }
+    }
+
     @Override
     public void onStreamFinished(Message assistantMsg, ApiService.ChatCompletionResult result, ApiError error) {
         stopPolling();
@@ -545,6 +672,10 @@ public class MainActivity extends AppCompatActivity implements StreamSession.Lis
             setPendingAsDefault();
             return true;
         }
+        if (id == R.id.action_image_gen) {
+            showImageGenDialog();
+            return true;
+        }
         if (id == R.id.action_about) {
             new AlertDialog.Builder(this)
                     .setTitle(R.string.about)
@@ -606,6 +737,7 @@ public class MainActivity extends AppCompatActivity implements StreamSession.Lis
         }
         updateModelButton();
         updateThinkingButton();
+        ImageGenManager.getInstance(this).addListener(this);
     }
 
     @Override
@@ -629,5 +761,6 @@ public class MainActivity extends AppCompatActivity implements StreamSession.Lis
         super.onDestroy();
         stopPolling();
         streamSession.setListener(null);
+        ImageGenManager.getInstance(this).removeListener(this);
     }
 }

@@ -4,9 +4,11 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- 拍照识图：仅在 Android 6+ 设备运行时申请（A5） -->
     <uses-permission android:name="android.permission.CAMERA" />
-    <!-- minSdk 21 不申请 WRITE_EXTERNAL_STORAGE：导出走 MediaStore.Downloads（A5） -->
+    <!-- 备份导出走 SAF（用户自选位置），无需存储权限 -->
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="22" />
+    <!-- 生图后台执行：前台服务保证切走 App / 锁屏时任务继续 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
 
     <application
         android:allowBackup="false"
@@ -29,6 +31,12 @@
         <activity
             android:name=".SettingsActivity"
             android:windowSoftInputMode="stateHidden" />
+
+        <!-- 生图后台服务（前台服务 + 通知） -->
+        <service
+            android:name=".ImageGenService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
 
         <!-- 步骤13：拍照全尺寸照片经 FileProvider 输出到 filesDir/images -->
         <provider

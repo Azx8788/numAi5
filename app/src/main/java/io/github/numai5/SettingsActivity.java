@@ -1,5 +1,7 @@
 package io.github.numai5;
 
+import android.content.Intent;
+import android.net.Uri;
 import android.os.Bundle;
 import android.view.LayoutInflater;
 import android.view.View;
@@ -11,10 +13,14 @@ import android.widget.Toast;
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import com.google.android.material.switchmaterial.SwitchMaterial;
+import java.text.SimpleDateFormat;
+import java.util.Date;
 import java.util.List;
+import java.util.Locale;
 import io.github.numai5.api.ApiCallback;
 import io.github.numai5.api.ApiError;
 import io.github.numai5.api.ApiService;
+import io.github.numai5.data.BackupManager;
 import io.github.numai5.data.ConfigManager;
 import io.github.numai5.model.Config;
 import io.github.numai5.provider.ModelCatalog;
@@ -29,11 +35,14 @@ import io.github.numai5.ui.ModelSelectorSheet;
 public class SettingsActivity extends AppCompatActivity {
 
     private LinearLayout providerList;
-    private Button btnAddProvider, btnDefaultModel, btnSave;
+    private Button btnAddProvider, btnDefaultModel, btnSave, btnExportBackup, btnImportBackup;
     private EditText editSystemPrompt;
     private SwitchMaterial switchNewapi;
     private ConfigManager configManager;
     private String selectedDefaultModelId;
+
+    private static final int REQ_EXPORT = 201;
+    private static final int REQ_IMPORT = 202;
 
     private final ApiService apiService = new ApiService(this);
 
@@ -50,6 +59,8 @@ public class SettingsActivity extends AppCompatActivity {
         btnAddProvider = findViewById(R.id.btnAddProvider);
         btnDefaultModel = findViewById(R.id.btnDefaultModel);
         btnSave = findViewById(R.id.btnSave);
+        btnExportBackup = findViewById(R.id.btnExportBackup);
+        btnImportBackup = findViewById(R.id.btnImportBackup);
         editSystemPrompt = findViewById(R.id.editSystemPrompt);
         switchNewapi = findViewById(R.id.switchNewapi);
 
@@ -67,6 +78,104 @@ public class SettingsActivity extends AppCompatActivity {
         });
         btnDefaultModel.setOnClickListener(v -> showModelSelector());
         btnSave.setOnClickListener(v -> save());
+        btnExportBackup.setOnClickListener(v -> startExport());
+        btnImportBackup.setOnClickListener(v -> startImport());
+    }
+
+    // ===== 备份与恢复 =====
+
+    private void startExport() {
+        Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("application/json");
+        String stamp = new SimpleDateFormat("yyyyMMdd-HHmm", Locale.US).format(new Date());
+        intent.putExtra(Intent.EXTRA_TITLE, "numAi5-backup-" + stamp + ".json");
+        try {
+            startActivityForResult(intent, REQ_EXPORT);
+        } catch (Exception e) {
+            Toast.makeText(this, R.string.backup_no_picker, Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void startImport() {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("*/*");
+        try {
+            startActivityForResult(intent, REQ_IMPORT);
+        } catch (Exception e) {
+            Toast.makeText(this, R.string.backup_no_picker, Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (resultCode != RESULT_OK || data == null || data.getData() == null) return;
+        final Uri uri = data.getData();
+        if (requestCode == REQ_EXPORT) {
+            exportTo(uri);
+        } else if (requestCode == REQ_IMPORT) {
+            confirmImport(uri);
+        }
+    }
+
+    private void exportTo(final Uri uri) {
+        Toast.makeText(this, R.string.backup_exporting, Toast.LENGTH_SHORT).show();
+        new Thread(() -> {
+            String error = null;
+            try {
+                BackupManager.exportTo(SettingsActivity.this, uri);
+            } catch (Exception e) {
+                error = e.getMessage() != null ? e.getMessage() : e.toString();
+            }
+            final String result = error;
+            runOnUiThread(() -> Toast.makeText(SettingsActivity.this,
+                    result == null ? getString(R.string.backup_export_done)
+                            : getString(R.string.backup_export_failed, result),
+                    Toast.LENGTH_LONG).show());
+        }).start();
+    }
+
+    private void confirmImport(final Uri uri) {
+        new Thread(() -> {
+            String error = null;
+            BackupManager.Backup backup = null;
+            try {
+                backup = BackupManager.readBackup(SettingsActivity.this, uri);
+            } catch (Exception e) {
+                error = e.getMessage() != null ? e.getMessage() : e.toString();
+            }
+            final BackupManager.Backup parsed = backup;
+            final String failure = error;
+            runOnUiThread(() -> {
+                if (failure != null || parsed == null) {
+                    Toast.makeText(SettingsActivity.this,
+                            getString(R.string.backup_import_failed, failure), Toast.LENGTH_LONG).show();
+                    return;
+                }
+                new AlertDialog.Builder(SettingsActivity.this)
+                        .setTitle(R.string.import_backup)
+                        .setMessage(getString(R.string.backup_import_confirm,
+                                BackupManager.describe(parsed)))
+                        .setPositiveButton(R.string.backup_import_do, (d, w) -> doImport(parsed))
+                        .setNegativeButton(R.string.cancel, null)
+                        .show();
+            });
+        }).start();
+    }
+
+    private void doImport(final BackupManager.Backup backup) {
+        new Thread(() -> {
+            final int count = BackupManager.restore(SettingsActivity.this, backup);
+            runOnUiThread(() -> {
+                Toast.makeText(SettingsActivity.this,
+                        getString(R.string.backup_import_done, count), Toast.LENGTH_LONG).show();
+                // 配置与聊天均已替换，重建界面状态后返回
+                setResult(RESULT_OK);
+                finish();
+            });
+        }).start();
     }
 
     // ===== 供应商列表 =====

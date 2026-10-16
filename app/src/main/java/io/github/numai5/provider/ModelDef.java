@@ -20,6 +20,8 @@ public class ModelDef {
     public boolean keepReasoningInHistory = false;
     public boolean needsMaxCompletionTokens = false;
     public boolean isReasoningOnly = false;
+    /** 是否为图像生成模型（dall-e / gpt-image / flux 等），用于生图入口筛选 */
+    public boolean supportsImageGen = false;
     public String effortDialect = "standard"; // standard | newapi
 
     public ModelDef() {
@@ -45,6 +47,7 @@ public class ModelDef {
     public ModelDef keepReasoning(boolean v) { this.keepReasoningInHistory = v; return this; }
     public ModelDef maxCompletion(boolean v) { this.needsMaxCompletionTokens = v; return this; }
     public ModelDef reasoningOnly(boolean v) { this.isReasoningOnly = v; return this; }
+    public ModelDef imageGen(boolean v) { this.supportsImageGen = v; return this; }
     public ModelDef dialect(String d) { this.effortDialect = d; return this; }
 
     @Override

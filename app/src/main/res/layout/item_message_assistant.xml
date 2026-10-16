@@ -44,6 +44,14 @@
         android:textIsSelectable="true"
         android:textSize="15sp" />
 
+    <!-- 生图结果（图片在提示词下方） -->
+    <LinearLayout
+        android:id="@+id/imageContainer"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:visibility="gone" />
+
     <TextView
         android:id="@+id/metaText"
         android:layout_width="wrap_content"

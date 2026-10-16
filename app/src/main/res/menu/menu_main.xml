@@ -10,6 +10,10 @@
         android:title="@string/history" />
 
     <item
+        android:id="@+id/action_image_gen"
+        android:title="@string/ai_image_gen" />
+
+    <item
         android:id="@+id/action_settings"
         android:title="@string/settings" />
 

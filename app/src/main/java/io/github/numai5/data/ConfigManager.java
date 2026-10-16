@@ -216,6 +216,26 @@ public class ConfigManager {
         save();
     }
 
+    /** 备份恢复：整体覆盖配置 */
+    public void importConfig(Config src) {
+        if (src == null) return;
+        List<Provider> providers = src.providers != null ? src.providers : new ArrayList<>();
+        for (Provider p : providers) {
+            if (p.models == null) p.models = new ArrayList<>();
+            if (p.id == null || p.id.length() == 0) {
+                p.id = "p" + UUID.randomUUID().toString().substring(0, 8);
+            }
+        }
+        config.providers = providers;
+        config.defaultModelId = src.defaultModelId == null ? "" : src.defaultModelId;
+        config.systemPrompt = src.systemPrompt == null ? "" : src.systemPrompt;
+        config.newapiDialect = src.newapiDialect;
+        config.shrinkThink = src.shrinkThink;
+        config.webSearchEnabled = src.webSearchEnabled;
+        config.webFetchEnabled = src.webFetchEnabled;
+        save();
+    }
+
     // ===== 输入栏按钮顺序（步骤：按钮可拖动排序） =====
 
     public String getToolOrder() {
