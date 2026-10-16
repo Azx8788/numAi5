@@ -21,6 +21,7 @@ import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import io.github.numai5.data.ConfigManager;
 import io.github.numai5.data.ContextTrimmer;
+import io.github.numai5.data.MessageManager;
 import io.github.numai5.model.Chat;
 import io.github.numai5.model.Config;
 import io.github.numai5.model.Message;
@@ -113,6 +114,11 @@ public class ApiService {
             boolean trimmed = ContextTrimmer.trim(source, history);
             if (currentUserMessage != null && !history.contains(currentUserMessage)) {
                 history.add(currentUserMessage); // 容错：调用方未把当前消息并入历史时兜底
+            }
+            // 系统提示词来自设置页：仅在请求上下文注入，不改动本地聊天历史；已有 system 消息时不重复
+            String sysPrompt = config.systemPrompt != null ? config.systemPrompt.trim() : "";
+            if (sysPrompt.length() > 0 && !containsSystemMessage(history)) {
+                history.add(0, MessageManager.createSystemMessage(sysPrompt));
             }
 
             JsonArray messages = buildMessages(model, history, currentUserMessage);
@@ -241,6 +247,13 @@ public class ApiService {
             if (t != null && t.length() > 0) return false;
         }
         return true;
+    }
+
+    private boolean containsSystemMessage(List<Message> messages) {
+        for (Message m : messages) {
+            if (m.getRoleEnum() == Role.SYSTEM) return true;
+        }
+        return false;
     }
 
     /** 取消后的统一收尾（步骤12）：标记中断、保留已收部分，仍走成功回调结束回合 */
