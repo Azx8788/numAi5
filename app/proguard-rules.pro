@@ -22,6 +22,12 @@
 -dontwarn okio.**
 -dontwarn javax.annotation.**
 
+# jlatexmath（LaTeX 渲染）：字体与符号表通过资源路径与反射（Class.forName）加载，整包保留
+-keep class org.scilab.forge.jlatexmath.** { *; }
+-keep class ru.noties.jlatexmath.** { *; }
+-dontwarn org.scilab.forge.jlatexmath.**
+-dontwarn ru.noties.jlatexmath.**
+
 # 保留 BuildConfig
 -keep class io.github.numai5.BuildConfig { *; }
 

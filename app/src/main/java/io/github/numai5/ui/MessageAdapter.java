@@ -103,6 +103,9 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
             contentText = v.findViewById(R.id.contentText);
             metaText = v.findViewById(R.id.metaText);
             imageContainer = v.findViewById(R.id.imageContainer);
+            // 公式以图片渲染，复制时把占位符还原为 LaTeX 原文
+            MathSpan.installCopyFix(contentText);
+            MathSpan.installCopyFix(thinkingContent);
         }
 
         void bind(Message msg) {
@@ -114,7 +117,8 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
                 thinkingContainer.setVisibility(View.VISIBLE);
                 thinkingLabel.setText(thinkingCollapsed ? "▶ 思考过程" : "▼ 思考过程");
                 thinkingContent.setVisibility(thinkingCollapsed ? View.GONE : View.VISIBLE);
-                thinkingContent.setText(MarkdownParser.parse(context, thinking, false));
+                thinkingContent.setText(MarkdownParser.parse(context, thinking, false,
+                        thinkingContent.getCurrentTextColor(), thinkingContent.getTextSize()));
                 thinkingLabel.setOnClickListener(v -> {
                     thinkingCollapsed = !thinkingCollapsed;
                     thinkingLabel.setText(thinkingCollapsed ? "▶ 思考过程" : "▼ 思考过程");
@@ -127,7 +131,8 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
             // 正文
             String display = msg.getDisplayRaw();
             if (display == null || display.length() == 0) display = msg.content == null ? "" : msg.content;
-            contentText.setText(MarkdownParser.parse(context, display, false));
+            contentText.setText(MarkdownParser.parse(context, display, false,
+                    contentText.getCurrentTextColor(), contentText.getTextSize()));
 
             // 生图结果
             bindGeneratedImages(context, msg);

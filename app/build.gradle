@@ -77,6 +77,10 @@ dependencies {
     // JSON
     implementation 'com.google.code.gson:gson:2.10.1'
 
+    // LaTeX 数学公式渲染（GPL-2.0 with Classpath Exception，允许与任意许可的独立模块链接）
+    implementation 'ru.noties:jlatexmath-android:0.2.0'
+    implementation 'ru.noties:jlatexmath-android-font-greek:0.2.0'
+
     // Java 8+ API 在 API 21+ 可用（java.time 等）
     coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.0.4'
 }

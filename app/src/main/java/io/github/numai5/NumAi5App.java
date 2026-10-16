@@ -5,6 +5,7 @@ import android.content.Context;
 import android.os.Build;
 import android.util.Log;
 import android.widget.Toast;
+import io.github.numai5.ui.MathRenderer;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
@@ -26,6 +27,8 @@ public class NumAi5App extends Application {
     @Override
     public void onCreate() {
         super.onCreate();
+        // 预热 LaTeX 渲染：字体首次加载较慢，放到后台线程，避免首条公式卡顿
+        new Thread(() -> MathRenderer.warmUp(this)).start();
         final Thread.UncaughtExceptionHandler previous = Thread.getDefaultUncaughtExceptionHandler();
         Thread.setDefaultUncaughtExceptionHandler((thread, throwable) -> {
             try {

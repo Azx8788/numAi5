@@ -2,6 +2,7 @@ package io.github.numai5.ui;
 
 import android.content.Context;
 import android.graphics.Typeface;
+import android.graphics.drawable.Drawable;
 import android.text.SpannableStringBuilder;
 import android.text.Spanned;
 import android.text.style.BulletSpan;
@@ -11,24 +12,23 @@ import android.text.style.StrikethroughSpan;
 import android.text.style.StyleSpan;
 import android.text.style.TypefaceSpan;
 import android.text.style.URLSpan;
+import androidx.core.content.ContextCompat;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import io.github.numai5.R;
 
 /**
- * 简化版 Markdown → Spannable（步骤18 重写）。
+ * 简化版 Markdown → Spannable（步骤18 重写；后续加入 LaTeX 公式渲染）。
  *
- * 旧实现的问题：applyInline/applyPattern/applyLinkPattern 每次都 clear()+重建，
- * 会清掉此前设置的所有 span（标题/引用/列表样式全部丢失，最终只剩最后一轮格式）；
- * CODE_BLOCK 正则定义了却从未使用。
- *
- * 新实现：文本加工（去标记）只在普通字符串上进行，所有样式先记录为
+ * 实现要点：文本加工（去标记）只在普通字符串上进行，所有样式先记录为
  * (start, end, span) 规格；每次替换文本时按映射函数同步更新已有规格坐标；
  * 最终一次性在同一个 SpannableStringBuilder 上应用全部 span，不再有清空重建。
- * 处理顺序：围栏代码块（块级，内容不参与 inline）→ 行内代码（加保护标记）→
- * 粗体 → 斜体 → 删除线 → 链接；被代码标记完整覆盖的匹配一律跳过。
+ * 处理顺序：公式提取（MathExtractor，先换成占位符，防止公式里的字符被 Markdown 规则破坏）→
+ * 围栏代码块（块级，内容不参与 inline）→ 行内代码（加保护标记）→ 粗体 → 斜体 → 删除线 → 链接
+ * → 最后把公式占位符替换为渲染好的图片（MathSpan）。
  * parse 本身不做缓存；流式生成时调用方每次传入最新全文即可（Message 侧已有失效机制）。
  */
 public class MarkdownParser {
@@ -65,14 +65,33 @@ public class MarkdownParser {
     private static final Pattern ITALIC_UNDERSCORE = Pattern.compile("_([^_]+)_");
     private static final Pattern STRIKE = Pattern.compile("~~([^~]+)~~");
     private static final Pattern LINK = Pattern.compile("\\[([^\\]]+)\\]\\(([^\\)]+)\\)");
+    /** 数学公式占位符：\u0001 + 序号 + \u0001（由 MathExtractor 生成） */
+    private static final Pattern MATH_PLACEHOLDER = Pattern.compile("\u0001(\\d+)\u0001");
 
     public static CharSequence parse(Context context, String text, boolean isGenerating) {
+        int color = 0xFF1A1A1A;
+        float textSizePx = 15f * 2.75f;
+        try {
+            color = ContextCompat.getColor(context, R.color.text_assistant);
+            textSizePx = 15f * context.getResources().getDisplayMetrics().scaledDensity;
+        } catch (Throwable ignored) {
+        }
+        return parse(context, text, isGenerating, color, textSizePx);
+    }
+
+    /**
+     * @param color      公式渲染颜色（跟随所在 TextView 的文字颜色）
+     * @param textSizePx 所在 TextView 的字号（px），公式按此大小渲染
+     */
+    public static CharSequence parse(Context context, String text, boolean isGenerating,
+                                     int color, float textSizePx) {
         if (text == null || text.length() == 0) return "";
+        MathExtractor.Result math = MathExtractor.extract(text);
         StringBuilder work = new StringBuilder();
         List<SpanSpec> specs = new ArrayList<>();
-        appendBlocks(work, specs, text);
+        appendBlocks(work, specs, math.text);
         applyInlines(work, specs);
-        return assemble(work, specs);
+        return assemble(context, work, specs, math, color, textSizePx);
     }
 
     // ===== 块级：围栏代码块 / 标题 / 引用 / 列表 =====
@@ -90,6 +109,10 @@ public class MarkdownParser {
             if (inCode) {
                 sb.append(line);
                 specs.add(new SpanSpec(lineStart, sb.length(), new CodeSpan()));
+                if (sb.length() > lineStart) {
+                    // 代码块内容用等宽字体（顶层样式，先加保护标记再加字体，顺序无关）
+                    specs.add(new SpanSpec(lineStart, sb.length(), new TypefaceSpan("monospace")));
+                }
             } else if (line.startsWith("# ")) {
                 sb.append(line.substring(2));
                 addHeading(specs, lineStart, sb.length(), 1.4f);
@@ -232,14 +255,54 @@ public class MarkdownParser {
         return p + delta;
     }
 
-    /** 最终一次性应用全部 span（代码标记不渲染，零长度规格丢弃） */
-    private static CharSequence assemble(StringBuilder text, List<SpanSpec> specs) {
+    /** 最终一次性应用全部 span（代码标记不渲染，零长度规格丢弃），随后替换公式占位符 */
+    private static CharSequence assemble(Context context, StringBuilder text, List<SpanSpec> specs,
+                                         MathExtractor.Result math, int color, float textSizePx) {
         SpannableStringBuilder sb = new SpannableStringBuilder(text);
         for (SpanSpec spec : specs) {
             if (spec.span instanceof CodeSpan) continue;
             if (spec.end <= spec.start) continue;
             sb.setSpan(spec.span, spec.start, spec.end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
         }
+        if (math != null && math.hasMath()) {
+            applyMathSpans(context, sb, math.segments, color, textSizePx);
+        }
         return sb;
+    }
+
+    /** 把公式占位符替换为图片 Span；渲染失败时按原文回退。从后往前处理，避免坐标位移影响 */
+    private static void applyMathSpans(Context context, SpannableStringBuilder sb,
+                                       List<MathExtractor.Segment> segments, int color, float textSizePx) {
+        Matcher m = MATH_PLACEHOLDER.matcher(sb);
+        List<int[]> found = new ArrayList<>(); // {start, end, segmentIndex}
+        while (m.find()) {
+            int index;
+            try {
+                index = Integer.parseInt(m.group(1));
+            } catch (NumberFormatException e) {
+                continue;
+            }
+            if (index >= 0 && index < segments.size()) {
+                found.add(new int[]{m.start(), m.end(), index});
+            }
+        }
+        if (found.isEmpty()) return;
+
+        int maxWidth = context.getResources().getDisplayMetrics().widthPixels
+                - (int) (100 * context.getResources().getDisplayMetrics().density);
+        if (maxWidth < 120) maxWidth = 120;
+
+        for (int k = found.size() - 1; k >= 0; k--) {
+            int[] pos = found.get(k);
+            MathExtractor.Segment segment = segments.get(pos[2]);
+            Drawable drawable = MathRenderer.render(context, segment.latex, segment.display,
+                    textSizePx, maxWidth, color);
+            if (drawable != null) {
+                sb.setSpan(new MathSpan(drawable, segment.raw), pos[0], pos[1],
+                        Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            } else {
+                sb.replace(pos[0], pos[1], segment.raw);
+            }
+        }
     }
 }
