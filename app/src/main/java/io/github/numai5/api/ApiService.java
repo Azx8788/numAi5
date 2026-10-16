@@ -62,7 +62,7 @@ public class ApiService {
     private volatile boolean cancelled;
 
     public ApiService(Context context) {
-        this.context = context.getApplicationContext();
+        this.context = resolveAppContext(context);
         this.apiClient = new ApiClient();
         this.configManager = ConfigManager.getInstance(context);
         this.mainHandler = new Handler(Looper.getMainLooper());
@@ -72,6 +72,22 @@ public class ApiService {
                 .writeTimeout(60, TimeUnit.SECONDS)
                 .retryOnConnectionFailure(true)
                 .build();
+    }
+
+    /**
+     * 兜底：若传入的是尚未 attach 的 Activity（例如误在字段初始化里 new ApiService(this)），
+     * getApplicationContext() 会抛 NPE。此时退回使用传入的 Context 而不是崩溃。
+     * 正确做法仍是在 onCreate 之后创建，避免持有 Activity 引用。
+     */
+    private static Context resolveAppContext(Context context) {
+        if (context == null) return null;
+        try {
+            Context app = context.getApplicationContext();
+            return app != null ? app : context;
+        } catch (Exception e) {
+            Log.e(TAG, "context not attached yet, fallback to given context", e);
+            return context;
+        }
     }
 
     /**

@@ -24,6 +24,9 @@
     <string name="truncated">因长度截断</string>
     <string name="no_vision">当前模型不支持视觉</string>
     <string name="about">关于</string>
+    <string name="about_last_crash">上次异常日志（可长按复制后反馈）：</string>
+    <string name="clear_crash_log">清除日志</string>
+    <string name="crash_recorded">程序异常，日志已记录（关于 → 查看）</string>
     <string name="cancel">取消</string>
     <string name="ok">确定</string>
     <string name="delete">删除</string>

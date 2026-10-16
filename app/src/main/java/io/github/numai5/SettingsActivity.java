@@ -44,7 +44,12 @@ public class SettingsActivity extends AppCompatActivity {
     private static final int REQ_EXPORT = 201;
     private static final int REQ_IMPORT = 202;
 
-    private final ApiService apiService = new ApiService(this);
+    /**
+     * 注意：不能在字段初始化里创建（如 `= new ApiService(this)`）。
+     * 字段初始化在 Activity 构造函数中执行，早于 attach()，此时 getApplicationContext() 会抛 NPE，
+     * 表现为「一打开设置页就闪退」。必须在 onCreate 之后创建。
+     */
+    private ApiService apiService;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -54,6 +59,7 @@ public class SettingsActivity extends AppCompatActivity {
 
         configManager = ConfigManager.getInstance(this);
         Config config = configManager.getConfig();
+        apiService = new ApiService(this); // 见字段注释：必须在 attach 之后创建
 
         providerList = findViewById(R.id.providerList);
         btnAddProvider = findViewById(R.id.btnAddProvider);

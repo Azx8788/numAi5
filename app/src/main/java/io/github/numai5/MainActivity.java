@@ -16,6 +16,7 @@ import android.widget.Button;
 import android.widget.EditText;
 import android.widget.ImageButton;
 import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 import androidx.annotation.NonNull;
@@ -677,14 +678,43 @@ public class MainActivity extends AppCompatActivity implements StreamSession.Lis
             return true;
         }
         if (id == R.id.action_about) {
-            new AlertDialog.Builder(this)
-                    .setTitle(R.string.about)
-                    .setMessage(getString(R.string.about_version_format, BuildConfig.VERSION_NAME))
-                    .setPositiveButton(R.string.ok, null)
-                    .show();
+            showAbout();
             return true;
         }
         return super.onOptionsItemSelected(item);
+    }
+
+    /** 关于：版本信息；若上次发生崩溃，一并展示堆栈便于反馈（可长按复制） */
+    private void showAbout() {
+        String message = getString(R.string.about_version_format, BuildConfig.VERSION_NAME);
+        final String crash = NumAi5App.readCrash(this);
+        if (crash != null && crash.length() > 0) {
+            message = message + "\n\n" + getString(R.string.about_last_crash) + "\n\n" + crash;
+        }
+
+        float density = getResources().getDisplayMetrics().density;
+        int pad = (int) (density * 20);
+        TextView text = new TextView(this);
+        text.setTextIsSelectable(true);
+        text.setTextSize(12f);
+        text.setText(message);
+        text.setPadding(pad, pad, pad, pad);
+
+        ScrollView scroll = new ScrollView(this);
+        scroll.addView(text, new ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        scroll.setLayoutParams(new ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, (int) (density * 420)));
+
+        AlertDialog.Builder builder = new AlertDialog.Builder(this)
+                .setTitle(R.string.about)
+                .setView(scroll)
+                .setPositiveButton(R.string.ok, null);
+        if (crash != null && crash.length() > 0) {
+            builder.setNeutralButton(R.string.clear_crash_log,
+                    (d, w) -> NumAi5App.clearCrash(this));
+        }
+        builder.show();
     }
 
     /** 生成期间禁止新建/切换会话（步骤11） */
