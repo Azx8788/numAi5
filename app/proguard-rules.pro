@@ -24,3 +24,8 @@
 
 # 保留 BuildConfig
 -keep class io.github.numai5.BuildConfig { *; }
+
+# Gson 2.10.x 无默认 R8 规则：显式保留数据类无参构造（步骤19）
+-keepclassmembers class io.github.numai5.model.** { <init>(); }
+-keepclassmembers class io.github.numai5.provider.** { <init>(); }
+-keepclassmembers class io.github.numai5.data.** { <init>(); }

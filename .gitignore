@@ -11,3 +11,6 @@ captures/
 
 # 本地文件（含敏感信息，勿入库）
 开发计划.txt
+
+# 签名 keystore（CI 解码生成 / 本地构建用，勿入库）
+app/release.keystore

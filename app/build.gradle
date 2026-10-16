@@ -2,6 +2,14 @@ plugins {
     id 'com.android.application'
 }
 
+// 发布签名（步骤23）：CI 从 secrets 解码 app/release.keystore 并注入环境变量；
+// keystore 或环境变量缺失时跳过签名（产物为未签名 release，不影响其他构建）。
+def releaseKeystoreFile = file('release.keystore')
+def hasReleaseSigning = releaseKeystoreFile.exists()
+        && System.getenv('RELEASE_KEYSTORE_PASSWORD') != null
+        && System.getenv('RELEASE_KEY_ALIAS') != null
+        && System.getenv('RELEASE_KEY_PASSWORD') != null
+
 android {
     namespace 'io.github.numai5'
     compileSdk 34
@@ -15,8 +23,22 @@ android {
         setProperty("archivesBaseName", "numAi5-$versionName")
     }
 
+    signingConfigs {
+        if (hasReleaseSigning) {
+            release {
+                storeFile releaseKeystoreFile
+                storePassword System.getenv('RELEASE_KEYSTORE_PASSWORD')
+                keyAlias System.getenv('RELEASE_KEY_ALIAS')
+                keyPassword System.getenv('RELEASE_KEY_PASSWORD')
+            }
+        }
+    }
+
     buildTypes {
         release {
+            if (hasReleaseSigning) {
+                signingConfig signingConfigs.release
+            }
             shrinkResources true
             minifyEnabled true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
