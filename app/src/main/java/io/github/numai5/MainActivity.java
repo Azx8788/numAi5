@@ -386,7 +386,7 @@ public class MainActivity extends AppCompatActivity implements StreamSession.Lis
         final Button btnSize = content.findViewById(R.id.btnImageGenSize);
         final EditText editPrompt = content.findViewById(R.id.editImageGenPrompt);
 
-        if (imageGenModel == null || !containsModel(models, imageGenModel.id)) {
+        if (imageGenModel == null || !containsModel(models, imageGenModel.uid())) {
             imageGenModel = models.get(0);
         }
         btnModel.setText(imageGenModel.displayName);
@@ -396,7 +396,7 @@ public class MainActivity extends AppCompatActivity implements StreamSession.Lis
             String[] labels = new String[models.size()];
             for (int i = 0; i < models.size(); i++) {
                 ModelDef m = models.get(i);
-                Provider p = ModelCatalog.getInstance().findProviderOfModel(m.id);
+                Provider p = ModelCatalog.getInstance().findProviderOfModel(m.uid());
                 labels[i] = (p != null ? p.displayName() + " · " : "") + m.displayName;
             }
             new AlertDialog.Builder(this)
@@ -427,9 +427,9 @@ public class MainActivity extends AppCompatActivity implements StreamSession.Lis
                 .show();
     }
 
-    private boolean containsModel(List<ModelDef> models, String id) {
+    private boolean containsModel(List<ModelDef> models, String uid) {
         for (ModelDef m : models) {
-            if (m.id != null && m.id.equals(id)) return true;
+            if (uid != null && uid.equals(m.uid())) return true;
         }
         return false;
     }
@@ -443,7 +443,7 @@ public class MainActivity extends AppCompatActivity implements StreamSession.Lis
             toast(getString(R.string.imagegen_no_model));
             return;
         }
-        Provider provider = ModelCatalog.getInstance().findProviderOfModel(imageGenModel.id);
+        Provider provider = ModelCatalog.getInstance().findProviderOfModel(imageGenModel.uid());
         if (provider == null || !provider.isValidForFetch()) {
             toast(getString(R.string.imagegen_provider_invalid));
             return;
@@ -528,7 +528,7 @@ public class MainActivity extends AppCompatActivity implements StreamSession.Lis
             btnModel.setText(R.string.model_not_selected);
             return;
         }
-        boolean isDefault = defaultModel != null && pendingModel.id.equals(defaultModel.id);
+        boolean isDefault = defaultModel != null && pendingModel.uid().equals(defaultModel.uid());
         String status = getString(isDefault ? R.string.default_label : R.string.temp_label);
         Provider provider = ModelCatalog.getInstance().findProvider(pendingModel.providerId);
         String providerLabel = provider != null ? provider.displayName() : pendingModel.providerId;
@@ -778,7 +778,7 @@ public class MainActivity extends AppCompatActivity implements StreamSession.Lis
             outState.putString(STATE_CHAT_ID, chat.id);
         }
         if (pendingModel != null) {
-            outState.putString(STATE_PENDING_MODEL, pendingModel.id);
+            outState.putString(STATE_PENDING_MODEL, pendingModel.uid());
         }
         outState.putString(STATE_PENDING_LEVEL, pendingLevel.name());
         outState.putStringArrayList(STATE_PENDING_IMAGES, new ArrayList<>(pendingImages));

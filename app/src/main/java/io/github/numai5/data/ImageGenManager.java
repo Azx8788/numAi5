@@ -125,7 +125,7 @@ public class ImageGenManager {
                 .putString(KEY_PROMPT, prompt)
                 .apply();
 
-        ImageGenService.start(appContext, provider.id, model.id, prompt, size, n);
+        ImageGenService.start(appContext, provider.id, model.uid(), prompt, size, n);
         return msg.id;
     }
 

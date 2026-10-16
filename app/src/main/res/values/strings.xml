@@ -59,7 +59,13 @@
     <string name="provider_models_format">模型 %1$d</string>
     <string name="fetch_provider_models">拉取模型</string>
     <string name="fetching_models">正在拉取模型…</string>
-    <string name="models_fetched_format">已拉取 %1$d 个模型</string>
+    <string name="models_added_format">已添加 %1$d 个模型</string>
+    <string name="models_empty">该供应商没有返回任何模型</string>
+    <string name="pick_models_title">%1$s：勾选要添加的模型（共 %2$d 个）</string>
+    <string name="search_model_hint">搜索模型名或供应商</string>
+    <string name="search_no_result">没有匹配的模型</string>
+    <string name="picker_count_format">已勾选 %1$d / 共 %2$d 个</string>
+    <string name="picker_count_filtered_format">已勾选 %1$d / 筛选出 %2$d 个（共 %3$d 个）</string>
     <string name="fetch_failed_format">拉取失败：%1$s</string>
     <string name="delete_provider_confirm">确定删除供应商「%1$s」？其模型列表也会一并移除。</string>
     <string name="no_models_hint">暂无模型，请先在设置中添加供应商并拉取模型</string>

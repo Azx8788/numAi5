@@ -44,6 +44,17 @@ public class ModelDef {
         return supportsImageGen;
     }
 
+    /**
+     * 唯一标识：供应商 id + "/" + 模型 id。
+     * 不同中转站经常提供同名模型（都提供 gpt-4o、deepseek-chat 等），
+     * 只按模型名查找会串到别的供应商，导致选中的模型与实际请求的地址/Key 对不上。
+     * 因此凡是需要「定位到某一个模型」的场合（默认模型、会话选择、生图任务、跨供应商勾选）
+     * 都必须使用本方法，而不是 id。
+     */
+    public String uid() {
+        return (providerId == null ? "" : providerId) + "/" + (id == null ? "" : id);
+    }
+
     /** 记录用户的手动标记；与自动推断一致时回到「跟随自动」状态，避免无谓地锁死推断结果 */
     public void setImageGenTag(boolean tagged) {
         if (tagged == supportsImageGen) {

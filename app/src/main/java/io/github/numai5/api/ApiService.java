@@ -113,7 +113,8 @@ public class ApiService {
                                   Message assistantMsg, ApiCallback<ChatCompletionResult> callback,
                                   int reasoningRetries, boolean maxRetryUsed) {
         Config config = configManager.getConfig();
-        Provider provider = ModelCatalog.getInstance().findProviderOfModel(model.id);
+        // 用 uid 定位供应商：同名模型可能出现在多个中转站，只按模型名会串到别家
+        Provider provider = ModelCatalog.getInstance().findProviderOfModel(model.uid());
         if (provider == null) {
             postError(callback, new ApiError("未找到模型所属的供应商，请到设置中检查"));
             return;
@@ -603,7 +604,7 @@ public class ApiService {
                 JsonObject obj = JsonParser.parseString(response.body).getAsJsonObject();
                 JsonArray data = obj.getAsJsonArray("data");
                 List<ModelDef> models = ModelCatalog.getInstance().parseModelsEndpoint(data, provider.id);
-                ConfigManager.getInstance().mergeModels(provider.id, models);
+                // 只解析、不落库：由调用方（设置页）弹出挑选对话框后决定添加哪些模型
                 postSuccess(callback, models);
             } catch (ApiError e) {
                 postError(callback, e);

@@ -18,9 +18,12 @@ import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import com.google.android.material.switchmaterial.SwitchMaterial;
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
 import java.util.Date;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import io.github.numai5.api.ApiCallback;
 import io.github.numai5.api.ApiError;
 import io.github.numai5.api.ApiService;
@@ -30,6 +33,7 @@ import io.github.numai5.model.Config;
 import io.github.numai5.provider.ModelCatalog;
 import io.github.numai5.provider.ModelDef;
 import io.github.numai5.provider.Provider;
+import io.github.numai5.ui.ModelPickerDialog;
 import io.github.numai5.ui.ModelSelectorSheet;
 
 /**
@@ -99,7 +103,7 @@ public class SettingsActivity extends AppCompatActivity {
     /**
      * 手动标记哪些模型是绘图模型。
      * 自动识别（按名字猜）只作默认值，这里勾选的结果优先级更高——中转站的模型名不一定规范，
-     * 漏判时可以手动勾上，误判时可以手动取消。
+     * 漏判时可以手动勾上，误判时可以手动取消。跨供应商，对话框内显示归属并提供搜索。
      */
     private void showImageGenTagDialog() {
         final List<ModelDef> models = ModelCatalog.getInstance().getAllModels();
@@ -108,30 +112,26 @@ public class SettingsActivity extends AppCompatActivity {
             return;
         }
 
-        CharSequence[] labels = new CharSequence[models.size()];
-        final boolean[] checked = new boolean[models.size()];
-        for (int i = 0; i < models.size(); i++) {
-            ModelDef m = models.get(i);
-            Provider p = configManager.findProvider(m.providerId);
-            labels[i] = (p != null ? p.displayName() + " · " : "") + m.displayName;
-            checked[i] = m.isImageGen();
+        List<String> preselected = new ArrayList<>();
+        for (ModelDef m : models) {
+            if (m.isImageGen()) preselected.add(m.uid());
         }
 
-        new AlertDialog.Builder(this)
-                .setTitle(R.string.imagegen_tag_button)
-                .setMultiChoiceItems(labels, checked, (dialog, which, isChecked) -> checked[which] = isChecked)
-                .setPositiveButton(R.string.save, (dialog, which) -> {
-                    int count = 0;
-                    for (int i = 0; i < models.size(); i++) {
-                        models.get(i).setImageGenTag(checked[i]);
-                        if (checked[i]) count++;
+        ModelPickerDialog.show(this, getString(R.string.imagegen_tag_button),
+                models, preselected, new ModelPickerDialog.OnPickListener() {
+                    @Override
+                    public void onPick(List<ModelDef> selected) {
+                        Set<String> selectedUids = new HashSet<>();
+                        for (ModelDef m : selected) selectedUids.add(m.uid());
+                        for (ModelDef m : models) {
+                            m.setImageGenTag(selectedUids.contains(m.uid()));
+                        }
+                        configManager.refresh(); // 一次性保存
+                        Toast.makeText(SettingsActivity.this,
+                                getString(R.string.imagegen_tag_saved, selected.size()),
+                                Toast.LENGTH_SHORT).show();
                     }
-                    configManager.refresh(); // 一次性保存
-                    Toast.makeText(this, getString(R.string.imagegen_tag_saved, count),
-                            Toast.LENGTH_SHORT).show();
-                })
-                .setNegativeButton(R.string.cancel, null)
-                .show();
+                });
     }
 
     // ===== 备份与恢复 =====
@@ -354,9 +354,13 @@ public class SettingsActivity extends AppCompatActivity {
         apiService.getModels(provider, new ApiCallback<List<ModelDef>>() {
             @Override
             public void onSuccess(List<ModelDef> models) {
-                renderProviders();
-                Toast.makeText(SettingsActivity.this,
-                        getString(R.string.models_fetched_format, models.size()), Toast.LENGTH_SHORT).show();
+                // 拉取后不直接全部添加：弹窗让用户挑选真正要用的模型
+                if (models.isEmpty()) {
+                    Toast.makeText(SettingsActivity.this,
+                            R.string.models_empty, Toast.LENGTH_LONG).show();
+                    return;
+                }
+                showModelPickDialog(provider, models);
             }
 
             @Override
@@ -367,12 +371,34 @@ public class SettingsActivity extends AppCompatActivity {
         });
     }
 
+    /** 拉取结果挑选：已添加的模型默认勾选，新拉取的默认不勾选（按需挑选） */
+    private void showModelPickDialog(final Provider provider, final List<ModelDef> fetched) {
+        List<String> preselected = new ArrayList<>();
+        if (provider.models != null) {
+            for (ModelDef m : provider.models) {
+                if (m != null) preselected.add(m.uid());
+            }
+        }
+        ModelPickerDialog.show(this,
+                getString(R.string.pick_models_title, provider.displayName(), fetched.size()),
+                fetched, preselected, new ModelPickerDialog.OnPickListener() {
+                    @Override
+                    public void onPick(List<ModelDef> selected) {
+                        configManager.applySelectedModels(provider.id, selected);
+                        renderProviders();
+                        Toast.makeText(SettingsActivity.this,
+                                getString(R.string.models_added_format, selected.size()),
+                                Toast.LENGTH_SHORT).show();
+                    }
+                });
+    }
+
     // ===== 默认模型 =====
 
     private void updateDefaultModelButton() {
         ModelDef model = ModelCatalog.getInstance().getModel(selectedDefaultModelId);
         if (model != null) {
-            Provider provider = ModelCatalog.getInstance().findProviderOfModel(model.id);
+            Provider provider = ModelCatalog.getInstance().findProvider(model.providerId);
             String prefix = provider != null ? provider.displayName() + " · " : "";
             btnDefaultModel.setText(prefix + model.displayName);
         } else if (selectedDefaultModelId != null && selectedDefaultModelId.length() > 0) {
@@ -385,7 +411,7 @@ public class SettingsActivity extends AppCompatActivity {
     private void showModelSelector() {
         ModelSelectorSheet sheet = new ModelSelectorSheet();
         sheet.setListener(model -> {
-            selectedDefaultModelId = model.id;
+            selectedDefaultModelId = model.uid(); // 默认模型按 uid 保存，避免同名模型串供应商
             updateDefaultModelButton();
         });
         sheet.show(getSupportFragmentManager(), "model");

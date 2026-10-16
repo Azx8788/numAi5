@@ -32,10 +32,12 @@ public class ModelCatalog {
         return io.github.numai5.data.ConfigManager.getInstance().findProvider(id);
     }
 
-    public Provider findProviderOfModel(String modelId) {
-        return io.github.numai5.data.ConfigManager.getInstance().findProviderOfModel(modelId);
+    /** 按 uid（providerId/id）查供应商；兼容不含 "/" 的旧格式模型名 */
+    public Provider findProviderOfModel(String uid) {
+        return io.github.numai5.data.ConfigManager.getInstance().findProviderOfModel(uid);
     }
 
+    /** 跨全部供应商的所有模型（标识请用 ModelDef#uid，不要只按模型名） */
     public List<ModelDef> getAllModels() {
         List<ModelDef> all = new ArrayList<>();
         for (Provider p : getProviders()) {
@@ -49,12 +51,13 @@ public class ModelCatalog {
         return p != null && p.models != null ? new ArrayList<>(p.models) : new ArrayList<ModelDef>();
     }
 
-    public ModelDef getModel(String id) {
-        return io.github.numai5.data.ConfigManager.getInstance().findModel(id);
+    /** 按 uid（providerId/id）查模型；兼容不含 "/" 的旧格式模型名 */
+    public ModelDef getModel(String uid) {
+        return io.github.numai5.data.ConfigManager.getInstance().findModel(uid);
     }
 
-    public boolean hasModel(String id) {
-        return getModel(id) != null;
+    public boolean hasModel(String uid) {
+        return getModel(uid) != null;
     }
 
     /** 是否已存在同名（剥前缀）模型 */

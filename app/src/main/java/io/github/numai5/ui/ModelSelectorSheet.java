@@ -100,7 +100,7 @@ public class ModelSelectorSheet extends BottomSheetDialogFragment {
                 ((SectionVH) holder).bind((String) item);
             } else {
                 ModelDef model = (ModelDef) item;
-                ((ModelVH) holder).bind(model, model.id.equals(defaultId));
+                ((ModelVH) holder).bind(model, model.uid().equals(defaultId));
                 ((ModelVH) holder).itemView.setOnClickListener(v -> {
                     if (listener != null) listener.onSelected(model);
                     dismiss();

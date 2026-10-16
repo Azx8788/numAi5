@@ -5,7 +5,9 @@ import android.content.SharedPreferences;
 import com.google.gson.Gson;
 import com.google.gson.reflect.TypeToken;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import io.github.numai5.model.Config;
 import io.github.numai5.provider.ModelDef;
@@ -128,22 +130,48 @@ public class ConfigManager {
         return null;
     }
 
-    /** 模型所属供应商（发送时据此取地址与 Key） */
-    public Provider findProviderOfModel(String modelId) {
-        if (modelId == null) return null;
+    /**
+     * 按 uid（供应商 id + "/" + 模型 id）查找模型所属供应商。
+     * 参数也可以是不含 "/" 的旧格式模型名——按名字在全部供应商中取第一个匹配项（兼容旧数据）。
+     */
+    public Provider findProviderOfModel(String uid) {
+        if (uid == null) return null;
+        int idx = uid.lastIndexOf('/');
+        if (idx > 0 && idx < uid.length() - 1) {
+            Provider owner = findProvider(uid.substring(0, idx));
+            String modelId = uid.substring(idx + 1);
+            if (owner != null && owner.models != null) {
+                for (ModelDef m : owner.models) {
+                    if (modelId.equals(m.id)) return owner;
+                }
+            }
+        }
         for (Provider p : config.providers) {
+            if (p.models == null) continue;
             for (ModelDef m : p.models) {
-                if (modelId.equals(m.id)) return p;
+                if (uid.equals(m.id)) return p;
             }
         }
         return null;
     }
 
-    public ModelDef findModel(String modelId) {
-        if (modelId == null) return null;
+    /** 按 uid 查找模型；同样兼容不含 "/" 的旧格式模型名 */
+    public ModelDef findModel(String uid) {
+        if (uid == null) return null;
+        int idx = uid.lastIndexOf('/');
+        if (idx > 0 && idx < uid.length() - 1) {
+            Provider owner = findProvider(uid.substring(0, idx));
+            String modelId = uid.substring(idx + 1);
+            if (owner != null && owner.models != null) {
+                for (ModelDef m : owner.models) {
+                    if (modelId.equals(m.id)) return m;
+                }
+            }
+        }
         for (Provider p : config.providers) {
+            if (p.models == null) continue;
             for (ModelDef m : p.models) {
-                if (modelId.equals(m.id)) return m;
+                if (uid.equals(m.id)) return m;
             }
         }
         return null;
@@ -161,12 +189,18 @@ public class ConfigManager {
         Provider p = findProvider(id);
         if (p == null) return;
         config.providers.remove(p);
-        // 默认模型属于被删供应商时清空
-        if (config.defaultModelId != null && p.models != null) {
-            for (ModelDef m : p.models) {
-                if (config.defaultModelId.equals(m.id)) {
-                    config.defaultModelId = "";
-                    break;
+        // 默认模型属于被删供应商时清空（defaultModelId 存的是 uid）
+        if (config.defaultModelId != null && config.defaultModelId.length() > 0) {
+            String prefix = id + "/";
+            if (config.defaultModelId.startsWith(prefix)) {
+                config.defaultModelId = "";
+            } else if (p.models != null) {
+                // 兼容旧格式（仅模型名）
+                for (ModelDef m : p.models) {
+                    if (config.defaultModelId.equals(m.id)) {
+                        config.defaultModelId = "";
+                        break;
+                    }
                 }
             }
         }
@@ -182,26 +216,40 @@ public class ConfigManager {
         save();
     }
 
-    /** 合并 /models 拉取结果到指定供应商（保留已有模型的能力开关，补充新模型） */
-    public void mergeModels(String providerId, List<ModelDef> fetched) {
+    /**
+     * 用「挑选结果」替换该供应商的模型列表。
+     * 不少中转站有数百个模型，拉取后由用户勾选真正要用的几个，未勾选的会被移除。
+     * 已存在模型的手动绘图标记（imageGenOverride）会被保留，避免挑选后需要重打标记。
+     */
+    public void applySelectedModels(String providerId, List<ModelDef> selected) {
         Provider provider = findProvider(providerId);
-        if (provider == null || fetched == null) return;
-        for (ModelDef incoming : fetched) {
-            ModelDef existing = null;
-            for (ModelDef m : provider.models) {
-                if (m.id != null && m.id.equals(incoming.id)) {
-                    existing = m;
-                    break;
+        if (provider == null) return;
+
+        // 先记下旧的手动标记
+        Map<String, Integer> overrides = new HashMap<>();
+        if (provider.models != null) {
+            for (ModelDef old : provider.models) {
+                if (old != null && old.id != null && old.imageGenOverride != ModelDef.IMAGE_GEN_AUTO) {
+                    overrides.put(old.id, old.imageGenOverride);
                 }
             }
-            if (existing != null) {
-                existing.rawId = incoming.rawId;
-                if (incoming.id != null) existing.id = incoming.id;
-                // 注意：不动 supportsImageGen / imageGenOverride，
-                // 否则重新拉取模型会把用户手动打的绘图标记冲掉
-            } else {
-                provider.models.add(incoming);
+        }
+
+        List<ModelDef> merged = new ArrayList<>();
+        if (selected != null) {
+            for (ModelDef m : selected) {
+                if (m == null) continue;
+                Integer override = overrides.get(m.id);
+                if (override != null) m.imageGenOverride = override;
+                merged.add(m);
             }
+        }
+        provider.models = merged;
+
+        // 默认模型若已被移除则清空，避免指向不存在的模型
+        if (config.defaultModelId != null && config.defaultModelId.length() > 0
+                && findModel(config.defaultModelId) == null) {
+            config.defaultModelId = "";
         }
         save();
     }
