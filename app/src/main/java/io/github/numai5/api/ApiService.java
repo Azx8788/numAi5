@@ -29,6 +29,7 @@ import io.github.numai5.model.ThinkingLevel;
 import io.github.numai5.provider.ModelCatalog;
 import io.github.numai5.provider.ModelDef;
 import io.github.numai5.thinking.ThinkingMapper;
+import okhttp3.Call;
 import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
@@ -54,6 +55,10 @@ public class ApiService {
     private final Handler mainHandler;
     private final OkHttpClient sseClient;
 
+    /** 进行中的网络调用（步骤12 请求取消） */
+    private volatile Call activeCall;
+    private volatile boolean cancelled;
+
     public ApiService(Context context) {
         this.context = context.getApplicationContext();
         this.apiClient = new ApiClient();
@@ -73,7 +78,17 @@ public class ApiService {
      */
     public void chatCompletion(Chat chat, Message currentUserMessage, ModelDef model, ThinkingLevel level,
                                Message assistantMsg, ApiCallback<ChatCompletionResult> callback) {
+        cancelled = false;
         new Thread(() -> doChatCompletion(chat, currentUserMessage, model, level, assistantMsg, callback, 0, false)).start();
+    }
+
+    /** 取消进行中的请求（步骤12）：当前调用立即断开，回合以「中断」结束并保留已收内容 */
+    public void cancel() {
+        cancelled = true;
+        Call call = activeCall;
+        if (call != null) {
+            call.cancel();
+        }
     }
 
     private void doChatCompletion(Chat chat, Message currentUserMessage, ModelDef model, ThinkingLevel level,
@@ -82,6 +97,11 @@ public class ApiService {
         Config config = configManager.getConfig();
         String baseUrl = trimSlash(config.baseUrl);
         String modelId = model.requestId(); // 步骤8：优先使用 /models 返回的原始 id
+
+        if (cancelled) {
+            handleCancelled(assistantMsg, callback);
+            return;
+        }
 
         try {
             // 排除本轮占位的 assistant 消息，避免把空回复发进请求历史
@@ -142,20 +162,21 @@ public class ApiService {
                     .readTimeout(300, TimeUnit.SECONDS)
                     .build();
 
-            try (Response response = client.newCall(request).execute()) {
+            activeCall = client.newCall(request);
+            try (Response response = activeCall.execute()) {
                 if (!response.isSuccessful()) {
                     String errBody = response.body() != null ? response.body().string() : "";
                     String errLower = errBody.toLowerCase(Locale.ROOT);
                     if (response.code() == 400) {
                         // A1 400 自愈：含 reasoning_content 错误则翻转开关重试一次
-                        if (reasoningRetries == 0 && errLower.contains("reasoning_content")) {
+                        if (!cancelled && reasoningRetries == 0 && errLower.contains("reasoning_content")) {
                             model.keepReasoningInHistory = !model.keepReasoningInHistory;
                             doChatCompletion(chat, currentUserMessage, model, level, assistantMsg, callback,
                                     reasoningRetries + 1, maxRetryUsed);
                             return;
                         }
                         // 步骤5：中转不支持 max 时降级为 high 重试一次，并记住该模型
-                        if (!maxRetryUsed && "max".equals(effort)
+                        if (!cancelled && !maxRetryUsed && "max".equals(effort)
                                 && (errLower.contains("reasoning_effort") || errLower.contains("max"))) {
                             maxUnsupportedModels.add(model.id);
                             doChatCompletion(chat, currentUserMessage, model, level, assistantMsg, callback,
@@ -185,9 +206,15 @@ public class ApiService {
                     assistantMsg.setAsError(); // B4：保留已收到部分并标记中断
                 }
                 postSuccess(callback, result);
+            } finally {
+                activeCall = null;
             }
 
         } catch (ApiError e) {
+            if (cancelled) {
+                handleCancelled(assistantMsg, callback);
+                return;
+            }
             // B4 断流：保留已收到的部分内容并标记错误
             if (assistantMsg != null && !isEmpty(assistantMsg.content, assistantMsg.reasoningRaw)) {
                 assistantMsg.setAsError();
@@ -196,6 +223,10 @@ public class ApiService {
                 postError(callback, e);
             }
         } catch (Exception e) {
+            if (cancelled) {
+                handleCancelled(assistantMsg, callback);
+                return;
+            }
             if (assistantMsg != null && !isEmpty(assistantMsg.content, assistantMsg.reasoningRaw)) {
                 assistantMsg.setAsError();
                 postSuccess(callback, new ChatCompletionResult(assistantMsg));
@@ -210,6 +241,16 @@ public class ApiService {
             if (t != null && t.length() > 0) return false;
         }
         return true;
+    }
+
+    /** 取消后的统一收尾（步骤12）：标记中断、保留已收部分，仍走成功回调结束回合 */
+    private void handleCancelled(Message assistantMsg, ApiCallback<ChatCompletionResult> callback) {
+        if (assistantMsg != null) {
+            assistantMsg.setAsError();
+        }
+        ChatCompletionResult result = new ChatCompletionResult(assistantMsg);
+        result.interrupted = true;
+        postSuccess(callback, result);
     }
 
     private JsonArray buildMessages(ModelDef model, List<Message> allMessages, Message currentUserMessage) {

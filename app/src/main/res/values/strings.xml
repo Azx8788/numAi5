@@ -27,4 +27,15 @@
     <string name="no_tools">当前模型不支持工具调用</string>
     <string name="about">关于</string>
     <string name="cancel">取消</string>
+    <string name="ok">确定</string>
+    <string name="model_not_selected">未选择模型</string>
+    <string name="set_default_success">已设为默认模型</string>
+    <string name="about_version_format">版本 %1$s</string>
+    <string name="from_gallery">从相册选择</string>
+    <string name="from_camera">拍照</string>
+    <string name="remove_images">清除附件</string>
+    <string name="images_attached_format">已附加 %1$d 张图片</string>
+    <string name="camera_permission_denied">未授予相机权限</string>
+    <string name="ctx_trimmed">对话较长，已截断较早的历史上下文</string>
+    <string name="content_filtered">回复被内容过滤器截断</string>
 </resources>

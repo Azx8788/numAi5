@@ -1,0 +1,523 @@
+package io.github.numai5;
+
+import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.view.Menu;
+import android.view.MenuItem;
+import android.view.View;
+import android.view.inputmethod.EditorInfo;
+import android.widget.Button;
+import android.widget.EditText;
+import android.widget.ImageButton;
+import android.widget.Toast;
+import androidx.annotation.NonNull;
+import androidx.appcompat.app.AlertDialog;
+import androidx.appcompat.app.AppCompatActivity;
+import androidx.recyclerview.widget.LinearLayoutManager;
+import androidx.recyclerview.widget.RecyclerView;
+import java.util.ArrayList;
+import java.util.List;
+import io.github.numai5.api.ApiError;
+import io.github.numai5.api.ApiService;
+import io.github.numai5.data.ChatManager;
+import io.github.numai5.data.ConfigManager;
+import io.github.numai5.data.MessageManager;
+import io.github.numai5.data.StreamSession;
+import io.github.numai5.model.Chat;
+import io.github.numai5.model.Config;
+import io.github.numai5.model.Message;
+import io.github.numai5.model.ThinkingLevel;
+import io.github.numai5.provider.ModelCatalog;
+import io.github.numai5.provider.ModelDef;
+import io.github.numai5.provider.Provider;
+import io.github.numai5.ui.MessageAdapter;
+import io.github.numai5.ui.ModelSelectorSheet;
+import io.github.numai5.vision.ImagePicker;
+
+/**
+ * 主界面（步骤10-12）。
+ * 状态机：defaultModel（持久化默认）/ pendingModel·pendingLevel（待发送，可临时切换）/
+ * 发送瞬间锁定并传入请求（回合内不变，回合结束后下一条可再切换）。
+ * 流式刷新：每 200ms 轮询 assistantMsg.streamRev，有变化才重绘。
+ * 生命周期：旋转等重建由进程级 StreamSession 保留执行状态；进程被杀不伪装仍在生成。
+ */
+public class MainActivity extends AppCompatActivity implements StreamSession.Listener {
+
+    private static final String STATE_CHAT_ID = "chatId";
+    private static final String STATE_PENDING_MODEL = "pendingModelId";
+    private static final String STATE_PENDING_LEVEL = "pendingLevel";
+    private static final String STATE_PENDING_IMAGES = "pendingImages";
+    private static final long POLL_INTERVAL_MS = 200L;
+
+    private RecyclerView messageList;
+    private MessageAdapter adapter;
+    private EditText inputText;
+    private Button btnModel;
+    private Button btnThinking;
+    private ImageButton btnSend;
+    private ImageButton btnImage;
+    private ImageButton btnRemoveImage;
+
+    private ChatManager chatManager;
+    private ConfigManager configManager;
+    private StreamSession streamSession;
+
+    private final Handler handler = new Handler(Looper.getMainLooper());
+    private int lastRev = -1;
+    private final Runnable pollRunnable = new Runnable() {
+        @Override
+        public void run() {
+            Message msg = streamSession.getActiveMsg();
+            if (msg != null && msg.streamRev != lastRev) {
+                lastRev = msg.streamRev;
+                notifyStreamingItem();
+            }
+            handler.postDelayed(this, POLL_INTERVAL_MS);
+        }
+    };
+
+    /** 默认模型（来自配置，经「设为默认」修改） */
+    private ModelDef defaultModel;
+    /** 待发送选择（临时切换不影响默认模型） */
+    private ModelDef pendingModel;
+    private ThinkingLevel pendingLevel = ThinkingLevel.DEFAULT;
+    private final List<String> pendingImages = new ArrayList<>();
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_main);
+
+        chatManager = ChatManager.getInstance(this);
+        configManager = ConfigManager.getInstance(this);
+        streamSession = StreamSession.getInstance(this);
+        streamSession.setListener(this);
+
+        messageList = findViewById(R.id.messageList);
+        messageList.setLayoutManager(new LinearLayoutManager(this));
+        inputText = findViewById(R.id.inputText);
+        btnModel = findViewById(R.id.btnModel);
+        btnThinking = findViewById(R.id.btnThinking);
+        btnSend = findViewById(R.id.btnSend);
+        btnImage = findViewById(R.id.btnImage);
+        btnRemoveImage = findViewById(R.id.btnRemoveImage);
+
+        restoreState(savedInstanceState);
+        bindListeners();
+        loadCurrentChat();
+
+        // 旋转等重建后请求仍在进行：恢复轮询（进程被杀后 StreamSession 随进程消失，不会误恢复）
+        if (streamSession.isGenerating() && streamSession.getActiveMsg() != null) {
+            startPolling();
+        }
+    }
+
+    private void restoreState(Bundle savedInstanceState) {
+        if (savedInstanceState != null) {
+            String chatId = savedInstanceState.getString(STATE_CHAT_ID);
+            if (chatId != null) {
+                for (Chat c : chatManager.getChats()) {
+                    if (chatId.equals(c.id)) {
+                        chatManager.setCurrentChat(c);
+                        break;
+                    }
+                }
+            }
+            String modelId = savedInstanceState.getString(STATE_PENDING_MODEL);
+            if (modelId != null) {
+                pendingModel = ModelCatalog.getInstance().getModel(modelId);
+            }
+            String levelName = savedInstanceState.getString(STATE_PENDING_LEVEL);
+            if (levelName != null) {
+                pendingLevel = ThinkingLevel.fromName(levelName);
+            }
+            ArrayList<String> images = savedInstanceState.getStringArrayList(STATE_PENDING_IMAGES);
+            if (images != null) {
+                pendingImages.addAll(images);
+            }
+        }
+        refreshDefaultModel();
+        if (pendingModel == null) {
+            pendingModel = defaultModel; // 未选择过临时模型时跟随默认
+        }
+    }
+
+    private void bindListeners() {
+        btnSend.setOnClickListener(v -> {
+            if (streamSession.isGenerating()) {
+                streamSession.cancel(); // 生成中再次点击 = 取消（图标已切换为暂停样式）
+            } else {
+                doSend();
+            }
+        });
+        btnImage.setOnClickListener(v -> showImageMenu());
+        btnRemoveImage.setOnClickListener(v -> {
+            pendingImages.clear();
+            updateRemoveImageButton();
+        });
+        btnModel.setOnClickListener(v -> showModelSelector());
+        btnThinking.setOnClickListener(v -> showThinkingSelector());
+        inputText.setOnEditorActionListener((v, actionId, event) -> {
+            if (actionId == EditorInfo.IME_ACTION_SEND) {
+                doSend();
+                return true;
+            }
+            return false;
+        });
+    }
+
+    // ===== 发送 =====
+
+    private void doSend() {
+        if (streamSession.isGenerating()) {
+            toast(getString(R.string.generating));
+            return;
+        }
+        if (!configManager.isValid()) {
+            toast(getString(R.string.config_invalid));
+            return;
+        }
+        String text = inputText.getText().toString().trim();
+        List<String> images = new ArrayList<>(pendingImages);
+        if (text.length() == 0 && images.isEmpty()) return;
+
+        // 发送瞬间锁定当前选择（回合内不变；临时选择不修改默认模型）
+        ModelDef lockedModel = pendingModel;
+        ThinkingLevel lockedLevel = pendingLevel;
+        if (lockedModel == null) {
+            toast(getString(R.string.config_invalid));
+            return;
+        }
+        if (!images.isEmpty() && !lockedModel.supportsVision) {
+            toast(getString(R.string.no_vision));
+            return;
+        }
+
+        Chat chat = chatManager.getCurrentChat();
+        Message userMsg = MessageManager.createUserMessage(text, images.isEmpty() ? null : images);
+        Message assistantMsg = MessageManager.createAssistantMessage(
+                lockedModel.id, providerName(lockedModel), lockedLevel.name());
+
+        int insertAt = chat.messages.size();
+        chat.messages.add(userMsg);
+        chatManager.onMessageAdded(chat); // 先持久化用户消息（含自动标题）
+        chat.messages.add(assistantMsg);
+        adapter.notifyItemRangeInserted(insertAt, 2);
+        scrollToBottom();
+        updateTitle();
+
+        inputText.setText("");
+        pendingImages.clear();
+        updateRemoveImageButton();
+
+        streamSession.start(chat, userMsg, assistantMsg, lockedModel, lockedLevel);
+        startPolling();
+    }
+
+    private String providerName(ModelDef model) {
+        Provider provider = ModelCatalog.getInstance().findProvider(model.providerId);
+        return provider != null ? provider.name : model.providerId;
+    }
+
+    // ===== 流式刷新 =====
+
+    private void startPolling() {
+        lastRev = -1;
+        handler.removeCallbacks(pollRunnable);
+        handler.post(pollRunnable);
+        btnSend.setImageResource(android.R.drawable.ic_media_pause);
+    }
+
+    private void stopPolling() {
+        handler.removeCallbacks(pollRunnable);
+        btnSend.setImageResource(android.R.drawable.ic_menu_send);
+    }
+
+    private void notifyStreamingItem() {
+        int count = adapter.getItemCount();
+        if (count > 0) {
+            adapter.notifyItemChanged(count - 1);
+            messageList.scrollToPosition(count - 1);
+        }
+    }
+
+    @Override
+    public void onStreamFinished(Message assistantMsg, ApiService.ChatCompletionResult result, ApiError error) {
+        stopPolling();
+        int count = adapter.getItemCount();
+        if (count > 0) {
+            adapter.notifyItemChanged(count - 1);
+            messageList.scrollToPosition(count - 1);
+        }
+        if (error != null) {
+            String message = error.getMessage();
+            if (message == null || message.length() == 0) {
+                message = getString(R.string.interrupted);
+            }
+            toast(message);
+        } else if (result != null) {
+            if (result.notice != null) toast(result.notice);
+            if (result.truncated) toast(getString(R.string.truncated));
+            if (result.filtered) toast(getString(R.string.content_filtered));
+            if (result.trimmed) toast(getString(R.string.ctx_trimmed));
+        }
+        updateTitle();
+    }
+
+    // ===== 界面 =====
+
+    private void loadCurrentChat() {
+        Chat chat = chatManager.getCurrentChat();
+        if (chat == null) {
+            chatManager.startNewChat();
+            chat = chatManager.getCurrentChat();
+        }
+        adapter = new MessageAdapter(chat.messages);
+        messageList.setAdapter(adapter);
+        updateTitle();
+        updateModelButton();
+        updateThinkingButton();
+        updateRemoveImageButton();
+        scrollToBottom();
+    }
+
+    private void updateTitle() {
+        Chat chat = chatManager.getCurrentChat();
+        if (chat != null && chat.title != null && chat.title.length() > 0) {
+            setTitle(chat.title);
+        } else {
+            setTitle(R.string.app_name);
+        }
+    }
+
+    private void updateModelButton() {
+        if (pendingModel == null) {
+            btnModel.setText(R.string.model_not_selected);
+            return;
+        }
+        boolean isDefault = defaultModel != null && pendingModel.id.equals(defaultModel.id);
+        String status = getString(isDefault ? R.string.default_label : R.string.temp_label);
+        btnModel.setText(pendingModel.providerId + " · " + pendingModel.displayName + " · " + status);
+    }
+
+    private void updateThinkingButton() {
+        btnThinking.setText("🧠 " + pendingLevel.getDisplay());
+    }
+
+    private void updateRemoveImageButton() {
+        btnRemoveImage.setVisibility(pendingImages.isEmpty() ? View.GONE : View.VISIBLE);
+    }
+
+    private void refreshDefaultModel() {
+        Config config = configManager.getConfig();
+        defaultModel = ModelCatalog.getInstance().getModel(config.defaultModelId);
+    }
+
+    private void scrollToBottom() {
+        int count = adapter.getItemCount();
+        if (count > 0) {
+            messageList.scrollToPosition(count - 1);
+        }
+    }
+
+    private void toast(String message) {
+        Toast.makeText(this, message, Toast.LENGTH_SHORT).show();
+    }
+
+    // ===== 选择器与图片 =====
+
+    private void showModelSelector() {
+        ModelSelectorSheet sheet = new ModelSelectorSheet();
+        sheet.setListener(model -> {
+            pendingModel = model;
+            updateModelButton();
+        });
+        sheet.show(getSupportFragmentManager(), "model");
+    }
+
+    private void showThinkingSelector() {
+        final ThinkingLevel[] levels = ThinkingLevel.values();
+        String[] labels = new String[levels.length];
+        int checked = 0;
+        for (int i = 0; i < levels.length; i++) {
+            labels[i] = levels[i].getDisplay();
+            if (levels[i] == pendingLevel) checked = i;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.thinking_level)
+                .setSingleChoiceItems(labels, checked, (dialog, which) -> {
+                    pendingLevel = levels[which];
+                    updateThinkingButton();
+                    dialog.dismiss();
+                })
+                .setNegativeButton(R.string.cancel, null)
+                .show();
+    }
+
+    private void showImageMenu() {
+        if (pendingModel != null && !pendingModel.supportsVision) {
+            toast(getString(R.string.no_vision));
+            return;
+        }
+        new AlertDialog.Builder(this)
+                .setItems(new CharSequence[]{
+                        getString(R.string.from_gallery),
+                        getString(R.string.from_camera)
+                }, (dialog, which) -> {
+                    if (which == 0) {
+                        ImagePicker.pickImage(this);
+                    } else {
+                        ImagePicker.takePhoto(this);
+                    }
+                })
+                .show();
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == ImagePicker.REQ_PICK || requestCode == ImagePicker.REQ_CAMERA) {
+            String filename = ImagePicker.onActivityResult(this, requestCode, resultCode, data);
+            if (filename != null) {
+                pendingImages.add(filename);
+                updateRemoveImageButton();
+                toast(getString(R.string.images_attached_format, pendingImages.size()));
+            }
+        }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions,
+                                           @NonNull int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == ImagePicker.PERM_CAMERA) {
+            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                ImagePicker.takePhoto(this);
+            } else {
+                toast(getString(R.string.camera_permission_denied));
+            }
+        }
+    }
+
+    // ===== 菜单 =====
+
+    @Override
+    public boolean onCreateOptionsMenu(Menu menu) {
+        getMenuInflater().inflate(R.menu.menu_main, menu);
+        return true;
+    }
+
+    @Override
+    public boolean onOptionsItemSelected(MenuItem item) {
+        int id = item.getItemId();
+        if (id == R.id.action_new_chat) {
+            if (checkNotGenerating()) {
+                chatManager.startNewChat();
+                chatManager.saveAll();
+                loadCurrentChat();
+            }
+            return true;
+        }
+        if (id == R.id.action_history) {
+            if (checkNotGenerating()) {
+                showHistoryDialog();
+            }
+            return true;
+        }
+        if (id == R.id.action_settings) {
+            startActivity(new Intent(this, SettingsActivity.class));
+            return true;
+        }
+        if (id == R.id.action_set_default) {
+            setPendingAsDefault();
+            return true;
+        }
+        if (id == R.id.action_about) {
+            new AlertDialog.Builder(this)
+                    .setTitle(R.string.about)
+                    .setMessage(getString(R.string.about_version_format, BuildConfig.VERSION_NAME))
+                    .setPositiveButton(R.string.ok, null)
+                    .show();
+            return true;
+        }
+        return super.onOptionsItemSelected(item);
+    }
+
+    /** 生成期间禁止新建/切换会话（步骤11） */
+    private boolean checkNotGenerating() {
+        if (streamSession.isGenerating()) {
+            toast(getString(R.string.generating));
+            return false;
+        }
+        return true;
+    }
+
+    private void showHistoryDialog() {
+        final List<Chat> chats = chatManager.getSortedChats();
+        String[] titles = new String[chats.size()];
+        for (int i = 0; i < chats.size(); i++) {
+            String title = chats.get(i).title;
+            titles[i] = (title == null || title.length() == 0) ? getString(R.string.new_chat) : title;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.history)
+                .setItems(titles, (dialog, which) -> {
+                    chatManager.setCurrentChat(chats.get(which));
+                    loadCurrentChat();
+                })
+                .setNegativeButton(R.string.cancel, null)
+                .show();
+    }
+
+    private void setPendingAsDefault() {
+        if (pendingModel == null) {
+            toast(getString(R.string.config_invalid));
+            return;
+        }
+        configManager.updateDefaultModel(pendingModel.id);
+        refreshDefaultModel();
+        updateModelButton();
+        toast(getString(R.string.set_default_success));
+    }
+
+    // ===== 生命周期 =====
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        // 设置页返回：若此前跟随默认模型则更新为新默认；已有临时选择则保留
+        ModelDef previousDefault = defaultModel;
+        refreshDefaultModel();
+        if (pendingModel == null || (previousDefault != null && pendingModel.id.equals(previousDefault.id))) {
+            pendingModel = defaultModel;
+        }
+        updateModelButton();
+        updateThinkingButton();
+    }
+
+    @Override
+    protected void onSaveInstanceState(@NonNull Bundle outState) {
+        super.onSaveInstanceState(outState);
+        Chat chat = chatManager.getCurrentChat();
+        if (chat != null) {
+            outState.putString(STATE_CHAT_ID, chat.id);
+        }
+        if (pendingModel != null) {
+            outState.putString(STATE_PENDING_MODEL, pendingModel.id);
+        }
+        outState.putString(STATE_PENDING_LEVEL, pendingLevel.name());
+        outState.putStringArrayList(STATE_PENDING_IMAGES, new ArrayList<>(pendingImages));
+        // 注意：不保存 isGenerating——执行状态由进程级 StreamSession 承载，
+        // 进程被杀后不应伪装成仍在生成（步骤12 修正）
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        stopPolling();
+        streamSession.setListener(null);
+    }
+}
