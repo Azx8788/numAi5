@@ -146,23 +146,28 @@ public class ModelCatalog {
             m.isReasoningOnly = true;
         }
 
-        // 图像生成模型（生图入口只列这些）
+        // 图像生成模型（自动推断，仅作默认值；用户可在设置里手动标记覆盖）
         if (lower.contains("dall-e") || lower.contains("gpt-image") || lower.contains("imagen")
                 || lower.contains("flux") || lower.contains("stable-diffusion")
-                || lower.contains("sdxl") || lower.contains("midjourney")
-                || lower.contains("seedream") || lower.contains("kolors")
-                || lower.contains("cogview") || lower.contains("wanx")
+                || lower.contains("sdxl") || lower.contains("sd3") || lower.contains("midjourney")
+                || lower.contains("seedream") || lower.contains("seededit")
+                || lower.contains("kolors") || lower.contains("cogview") || lower.contains("wanx")
                 || lower.contains("hunyuan-image") || lower.contains("qwen-image")
-                || lower.contains("imagegen") || lower.contains("image-gen")) {
+                || lower.contains("imagegen") || lower.contains("image-gen")
+                || lower.contains("-image") || lower.contains("nano-banana")
+                || lower.contains("ideogram") || lower.contains("recraft")
+                || lower.contains("doubao") || lower.contains("t2i")
+                || lower.contains("text-to-image") || lower.contains("文生图")
+                || lower.contains("绘图") || lower.contains("画图")) {
             m.supportsImageGen = true;
         }
     }
 
-    /** 汇总所有供应商中的生图模型 */
+    /** 汇总所有供应商中的绘图模型（手动标记优先） */
     public List<ModelDef> getImageGenModels() {
         List<ModelDef> list = new ArrayList<>();
         for (ModelDef m : getAllModels()) {
-            if (m.supportsImageGen) list.add(m);
+            if (m.isImageGen()) list.add(m);
         }
         return list;
     }

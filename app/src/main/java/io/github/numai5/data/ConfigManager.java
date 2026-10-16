@@ -197,6 +197,8 @@ public class ConfigManager {
             if (existing != null) {
                 existing.rawId = incoming.rawId;
                 if (incoming.id != null) existing.id = incoming.id;
+                // 注意：不动 supportsImageGen / imageGenOverride，
+                // 否则重新拉取模型会把用户手动打的绘图标记冲掉
             } else {
                 provider.models.add(incoming);
             }

@@ -35,7 +35,7 @@ import io.github.numai5.ui.ModelSelectorSheet;
 public class SettingsActivity extends AppCompatActivity {
 
     private LinearLayout providerList;
-    private Button btnAddProvider, btnDefaultModel, btnSave, btnExportBackup, btnImportBackup;
+    private Button btnAddProvider, btnDefaultModel, btnSave, btnExportBackup, btnImportBackup, btnImageGenTag;
     private EditText editSystemPrompt;
     private SwitchMaterial switchNewapi;
     private ConfigManager configManager;
@@ -61,6 +61,7 @@ public class SettingsActivity extends AppCompatActivity {
         btnSave = findViewById(R.id.btnSave);
         btnExportBackup = findViewById(R.id.btnExportBackup);
         btnImportBackup = findViewById(R.id.btnImportBackup);
+        btnImageGenTag = findViewById(R.id.btnImageGenTag);
         editSystemPrompt = findViewById(R.id.editSystemPrompt);
         switchNewapi = findViewById(R.id.switchNewapi);
 
@@ -80,6 +81,47 @@ public class SettingsActivity extends AppCompatActivity {
         btnSave.setOnClickListener(v -> save());
         btnExportBackup.setOnClickListener(v -> startExport());
         btnImportBackup.setOnClickListener(v -> startImport());
+        btnImageGenTag.setOnClickListener(v -> showImageGenTagDialog());
+    }
+
+    // ===== 绘图模型标记 =====
+
+    /**
+     * 手动标记哪些模型是绘图模型。
+     * 自动识别（按名字猜）只作默认值，这里勾选的结果优先级更高——中转站的模型名不一定规范，
+     * 漏判时可以手动勾上，误判时可以手动取消。
+     */
+    private void showImageGenTagDialog() {
+        final List<ModelDef> models = ModelCatalog.getInstance().getAllModels();
+        if (models.isEmpty()) {
+            Toast.makeText(this, R.string.no_models_hint, Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        CharSequence[] labels = new CharSequence[models.size()];
+        final boolean[] checked = new boolean[models.size()];
+        for (int i = 0; i < models.size(); i++) {
+            ModelDef m = models.get(i);
+            Provider p = configManager.findProvider(m.providerId);
+            labels[i] = (p != null ? p.displayName() + " · " : "") + m.displayName;
+            checked[i] = m.isImageGen();
+        }
+
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.imagegen_tag_button)
+                .setMultiChoiceItems(labels, checked, (dialog, which, isChecked) -> checked[which] = isChecked)
+                .setPositiveButton(R.string.save, (dialog, which) -> {
+                    int count = 0;
+                    for (int i = 0; i < models.size(); i++) {
+                        models.get(i).setImageGenTag(checked[i]);
+                        if (checked[i]) count++;
+                    }
+                    configManager.refresh(); // 一次性保存
+                    Toast.makeText(this, getString(R.string.imagegen_tag_saved, count),
+                            Toast.LENGTH_SHORT).show();
+                })
+                .setNegativeButton(R.string.cancel, null)
+                .show();
     }
 
     // ===== 备份与恢复 =====

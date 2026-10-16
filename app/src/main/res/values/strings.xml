@@ -72,7 +72,7 @@
     <string name="imagegen_started">已提交，正在后台生成…</string>
     <string name="imagegen_done">图片生成完成</string>
     <string name="imagegen_failed_format">生图失败：%1$s</string>
-    <string name="imagegen_no_model">没有可用的绘图模型，请先在设置中拉取模型</string>
+    <string name="imagegen_no_model">还没有标记为绘图模型的模型，请到「设置 → 绘图模型标记」里勾选</string>
     <string name="imagegen_busy">已有生图任务在执行，请等待完成</string>
     <string name="imagegen_prompt_empty">请填写画面描述</string>
     <string name="imagegen_provider_invalid">所选模型的供应商未配置地址或 Key</string>
@@ -81,6 +81,12 @@
     <string name="imagegen_notification_done">图片生成完成，点击查看</string>
     <string name="imagegen_notification_failed">图片生成失败</string>
     <string name="imagegen_channel_name">AI 绘图任务</string>
+
+    <!-- 绘图模型标记 -->
+    <string name="imagegen_tag_section">绘图模型标记</string>
+    <string name="imagegen_tag_hint">中转站的模型名不一定规范，自动识别只作默认值。若「AI 绘图」里找不到某个绘图模型（或混进了文本模型），到这里手动勾选即可，勾选结果优先于自动识别。</string>
+    <string name="imagegen_tag_button">绘图模型标记</string>
+    <string name="imagegen_tag_saved">已保存，共标记 %1$d 个绘图模型</string>
 
     <!-- 备份与恢复 -->
     <string name="backup_section">备份与恢复</string>
