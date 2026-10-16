@@ -32,6 +32,8 @@ public class ApiClient {
     public ApiResponse execute(ApiRequest apiRequest) throws ApiError {
         String url = apiRequest.getBaseUrl() + apiRequest.getEndpoint();
         Request.Builder builder = new Request.Builder().url(url);
+        // 已知会对客户端做指纹校验的站点（如 agentrouter.org），自动补上兼容头
+        ApiCompatHeaders.apply(builder, url);
 
         String apiKey = apiRequest.getApiKey();
         if (apiKey != null && apiKey.length() > 0) {

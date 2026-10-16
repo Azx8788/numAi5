@@ -82,10 +82,14 @@ public class ImageGenApi {
             body.addProperty("response_format", "b64_json");
         }
 
-        Request request = new Request.Builder()
-                .url(provider.normalizedBaseUrl() + "/images/generations")
+        String url = provider.normalizedBaseUrl() + "/images/generations";
+        Request.Builder requestBuilder = new Request.Builder()
+                .url(url)
                 .header("Authorization", "Bearer " + provider.apiKey)
-                .header("Content-Type", "application/json")
+                .header("Content-Type", "application/json");
+        // 已知会对客户端做指纹校验的站点（如 agentrouter.org），自动补上兼容头
+        ApiCompatHeaders.apply(requestBuilder, url);
+        Request request = requestBuilder
                 .post(RequestBody.create(body.toString(), JSON))
                 .build();
 
@@ -151,7 +155,9 @@ public class ImageGenApi {
     private static byte[] download(String url) {
         if (url == null || url.length() == 0) return null;
         try {
-            Request request = new Request.Builder().url(url).get().build();
+            Request.Builder builder = new Request.Builder().url(url);
+            ApiCompatHeaders.apply(builder, url);
+            Request request = builder.get().build();
             try (Response response = CLIENT.newCall(request).execute()) {
                 if (!response.isSuccessful()) return null;
                 ResponseBody body = response.body();

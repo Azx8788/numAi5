@@ -8,7 +8,6 @@ import android.util.Log;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
-import com.google.gson.JsonParser;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
@@ -185,13 +184,15 @@ public class ApiService {
                 }
             }
 
-            Request request = new Request.Builder()
+            Request.Builder requestBuilder = new Request.Builder()
                     .url(baseUrl + "/chat/completions")
                     .header("Authorization", "Bearer " + apiKey)
-                    .header("Content-Type", "application/json")
+                    .header("Content-Type", "application/json");
+            // 已知会对客户端做指纹校验的站点（如 agentrouter.org），自动补上兼容头
+            ApiCompatHeaders.apply(requestBuilder, baseUrl + "/chat/completions");
+            Request request = requestBuilder
                     .post(RequestBody.create(payload.toString(), JSON))
                     .build();
-
             OkHttpClient client = sseClient.newBuilder()
                     .readTimeout(300, TimeUnit.SECONDS)
                     .build();
@@ -473,6 +474,8 @@ public class ApiService {
         while ((line = source.readUtf8Line()) != null) {
             if (!line.startsWith("data:")) continue;
             String jsonData = line.substring(5).trim();
+            // 部分站点会插入 data: null / 空行作为心跳，直接跳过
+            if (jsonData.length() == 0 || "null".equals(jsonData)) continue;
             if ("[DONE]".equals(jsonData)) {
                 receivedDone = true;
                 break;
@@ -480,7 +483,9 @@ public class ApiService {
 
             JsonObject chunk;
             try {
-                chunk = JsonParser.parseString(jsonData).getAsJsonObject();
+                JsonElement chunkElement = JsonUtil.parseLenient(jsonData);
+                if (chunkElement == null || !chunkElement.isJsonObject()) continue;
+                chunk = chunkElement.getAsJsonObject();
             } catch (Exception e) {
                 Log.e(TAG, "parse stream chunk", e);
                 continue;
