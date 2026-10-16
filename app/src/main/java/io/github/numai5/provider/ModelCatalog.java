@@ -77,6 +77,7 @@ public class ModelCatalog {
             ModelDef existing = models.get(id);
             if (existing != null) {
                 // 拉取到的更权威：更新能力开关，但保留 preset 的 provider/名称
+                existing.rawId = rawId; // 步骤8：请求时优先用原始 id
                 inferCapabilities(existing, rawId);
                 if (obj.has("displayName")) {
                     existing.displayName = obj.get("displayName").getAsString();
@@ -86,6 +87,7 @@ public class ModelCatalog {
 
             // 新模型
             ModelDef m = new ModelDef(id, id, inferProvider(rawId), false, false);
+            m.rawId = rawId; // 步骤8：请求时优先用原始 id
             inferCapabilities(m, rawId);
             // 若推断出 thinking/vision，更新显示名加后缀
             if (m.supportsThinking && m.supportsVision) m.displayName += " (🧠)";

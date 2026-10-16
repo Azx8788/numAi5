@@ -7,13 +7,18 @@ public class Config {
     public String defaultModelId = "";
     public String systemPrompt = "";
     public boolean shrinkThink = false;
-    public boolean newapiDialect = false;   // 中转带 Thinking 兼容层时启用（B1）
+    public boolean newapiDialect = true;   // 步骤5：默认按 NewAPI 方言（不支持 max 时自动降级为 high）
     public boolean webSearchEnabled = false;
     public boolean webFetchEnabled = false;
 
-    public boolean isValid() {
+    /** 步骤9：只校验中转地址与 Key，供首次拉取模型使用（不要求已保存默认模型）。 */
+    public boolean isValidForFetch() {
         return baseUrl != null && baseUrl.length() > 0
-                && apiKey != null && apiKey.length() > 0
+                && apiKey != null && apiKey.length() > 0;
+    }
+
+    public boolean isValid() {
+        return isValidForFetch()
                 && defaultModelId != null && defaultModelId.length() > 0;
     }
 }

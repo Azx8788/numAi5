@@ -37,6 +37,12 @@ public class Message {
     public transient boolean isThinkingState;
     public transient List<StreamToolCall> streamingToolCalls;
 
+    /**
+     * 流式刷新信号（步骤2）：后台线程每次追加内容后自增；主线程读取该 volatile 字段判断是否有更新，
+     * 并借助 volatile 的读写可见性保证 content/reasoningRaw 的安全读取。
+     */
+    public transient volatile int streamRev;
+
     // UI 缓存（不持久化）
     private transient String cachedRawContent = null;
     private transient CharSequence cachedParsedDisplayContent = null;
@@ -169,12 +175,13 @@ public class Message {
         cachedDisplayRaw = displaySb.toString().trim();
     }
 
-    /** 流式追加内容 */
+    /** 流式追加内容（步骤2：先写内容、后自增 streamRev，保证主线程能按序看到） */
     public void appendContent(String chunk) {
         if (chunk == null || chunk.length() == 0) return;
         if (content == null) content = "";
         content += chunk;
         invalidateCache();
+        streamRev++;
     }
 
     public void appendReasoning(String chunk) {
@@ -182,6 +189,7 @@ public class Message {
         if (reasoningRaw == null) reasoningRaw = "";
         reasoningRaw += chunk;
         invalidateCache();
+        streamRev++;
     }
 
     /** 工具调用流式聚合单元（不持久化） */

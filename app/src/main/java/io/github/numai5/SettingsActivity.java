@@ -82,7 +82,7 @@ public class SettingsActivity extends AppCompatActivity {
 
     private void fetchModels() {
         saveConfigOnly();
-        if (!configManager.isValid()) {
+        if (!configManager.isValidForFetch()) {
             Toast.makeText(this, R.string.config_invalid, Toast.LENGTH_SHORT).show();
             return;
         }

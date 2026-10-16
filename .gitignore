@@ -8,3 +8,6 @@ local.properties
 captures/
 .externalNativeBuild/
 .cxx/
+
+# 本地文件（含敏感信息，勿入库）
+开发计划.txt

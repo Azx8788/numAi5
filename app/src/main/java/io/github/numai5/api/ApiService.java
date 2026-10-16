@@ -13,13 +13,14 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.HashMap;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
+import java.util.Locale;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import io.github.numai5.data.ConfigManager;
 import io.github.numai5.data.ContextTrimmer;
-import io.github.numai5.data.MessageManager;
 import io.github.numai5.model.Chat;
 import io.github.numai5.model.Config;
 import io.github.numai5.model.Message;
@@ -43,6 +44,10 @@ public class ApiService {
     private static final String TAG = "ApiService";
     private static final MediaType JSON = MediaType.get("application/json; charset=utf-8");
 
+    /** 本会话内已确认不支持 max 的模型 id（步骤5）：之后 MAX 直接降级 high，不再发送 max */
+    private static final Set<String> maxUnsupportedModels =
+            Collections.synchronizedSet(new HashSet<>());
+
     private final Context context;
     private final ApiClient apiClient;
     private final ConfigManager configManager;
@@ -62,54 +67,62 @@ public class ApiService {
                 .build();
     }
 
+    /**
+     * 发起一轮对话（步骤2：assistantMsg 由调用方创建并加入会话，便于 UI 轮询流式刷新）。
+     * 回调统一切到主线程；中断时保留已收到的部分内容并标记 isError（B4）。
+     */
     public void chatCompletion(Chat chat, Message currentUserMessage, ModelDef model, ThinkingLevel level,
-                               ApiCallback<ChatCompletionResult> callback) {
-        new Thread(() -> doChatCompletion(chat, currentUserMessage, model, level, callback, 0)).start();
+                               Message assistantMsg, ApiCallback<ChatCompletionResult> callback) {
+        new Thread(() -> doChatCompletion(chat, currentUserMessage, model, level, assistantMsg, callback, 0, false)).start();
     }
 
     private void doChatCompletion(Chat chat, Message currentUserMessage, ModelDef model, ThinkingLevel level,
-                                  ApiCallback<ChatCompletionResult> callback, int retryCount) {
+                                  Message assistantMsg, ApiCallback<ChatCompletionResult> callback,
+                                  int reasoningRetries, boolean maxRetryUsed) {
         Config config = configManager.getConfig();
         String baseUrl = trimSlash(config.baseUrl);
-        String modelId = model.id;
-        Message assistantMsg = null;
+        String modelId = model.requestId(); // 步骤8：优先使用 /models 返回的原始 id
 
         try {
+            // 排除本轮占位的 assistant 消息，避免把空回复发进请求历史
+            List<Message> source = new ArrayList<>();
+            for (Message m : chat.messages) {
+                if (m != assistantMsg) source.add(m);
+            }
             List<Message> history = new ArrayList<>();
-            boolean trimmed = ContextTrimmer.trim(chat.messages, history);
-            // TODO: UI 提示 trimmed
+            boolean trimmed = ContextTrimmer.trim(source, history);
+            if (currentUserMessage != null && !history.contains(currentUserMessage)) {
+                history.add(currentUserMessage); // 容错：调用方未把当前消息并入历史时兜底
+            }
 
-            JsonObject body = buildRequestBody(model, level, history, currentUserMessage);
             JsonArray messages = buildMessages(model, history, currentUserMessage);
-            body.add("messages", messages);
 
             JsonObject payload = new JsonObject();
             payload.addProperty("model", modelId);
             payload.add("messages", messages);
             payload.addProperty("stream", true);
 
-            // 思考等级（A3）
+            // 思考等级（步骤5）：方言开关从配置读取（默认 NewAPI 方言）
+            String effort = null;
             if (model.supportsThinking) {
-                String effort = ThinkingMapper.apply(level, model.effortDialect);
+                effort = ThinkingMapper.apply(level, config.newapiDialect ? "newapi" : "standard");
                 if (effort != null) {
+                    if ("max".equals(effort) && maxUnsupportedModels.contains(model.id)) {
+                        effort = "high"; // 本会话内已知该模型不支持 max，直接降级
+                    }
                     payload.addProperty("reasoning_effort", effort);
                 }
             }
 
-            // max_tokens / max_completion_tokens 门控（A4）
-            if (model.needsMaxCompletionTokens) {
-                payload.addProperty("max_completion_tokens", 4096);
-            } else {
-                payload.addProperty("max_tokens", 4096);
-            }
-
+            // 步骤6：第一版不发送 max_tokens / max_completion_tokens，使用服务端默认额度
             // 推理模型不接受 temperature（A4）
             if (!model.isReasoningOnly) {
                 payload.addProperty("temperature", 0.7);
             }
 
-            // 工具：仅当前模型支持，且当前消息不含图片（numAi 经验）
-            boolean hasImages = currentUserMessage.inputImages != null && !currentUserMessage.inputImages.isEmpty();
+            // 工具：仅当前模型支持，且当前消息不含图片（numAi 经验；第一版默认不开启）
+            boolean hasImages = currentUserMessage != null
+                    && currentUserMessage.inputImages != null && !currentUserMessage.inputImages.isEmpty();
             if (model.supportsTools && !hasImages && (config.webSearchEnabled || config.webFetchEnabled)) {
                 JsonArray tools = buildTools(config);
                 if (tools.size() > 0) {
@@ -117,8 +130,6 @@ public class ApiService {
                     payload.addProperty("tool_choice", "auto");
                 }
             }
-
-            assistantMsg = MessageManager.createAssistantMessage(modelId, model.providerId, level.name());
 
             Request request = new Request.Builder()
                     .url(baseUrl + "/chat/completions")
@@ -134,12 +145,23 @@ public class ApiService {
             try (Response response = client.newCall(request).execute()) {
                 if (!response.isSuccessful()) {
                     String errBody = response.body() != null ? response.body().string() : "";
-                    // A1 400 自愈：含 reasoning_content 错误则翻转开关重试一次
-                    if (response.code() == 400 && retryCount == 0
-                            && errBody != null && errBody.contains("reasoning_content")) {
-                        model.keepReasoningInHistory = !model.keepReasoningInHistory;
-                        doChatCompletion(chat, currentUserMessage, model, level, callback, retryCount + 1);
-                        return;
+                    String errLower = errBody.toLowerCase(Locale.ROOT);
+                    if (response.code() == 400) {
+                        // A1 400 自愈：含 reasoning_content 错误则翻转开关重试一次
+                        if (reasoningRetries == 0 && errLower.contains("reasoning_content")) {
+                            model.keepReasoningInHistory = !model.keepReasoningInHistory;
+                            doChatCompletion(chat, currentUserMessage, model, level, assistantMsg, callback,
+                                    reasoningRetries + 1, maxRetryUsed);
+                            return;
+                        }
+                        // 步骤5：中转不支持 max 时降级为 high 重试一次，并记住该模型
+                        if (!maxRetryUsed && "max".equals(effort)
+                                && (errLower.contains("reasoning_effort") || errLower.contains("max"))) {
+                            maxUnsupportedModels.add(model.id);
+                            doChatCompletion(chat, currentUserMessage, model, level, assistantMsg, callback,
+                                    reasoningRetries, true);
+                            return;
+                        }
                     }
                     throw new ApiError(response.code() + " " + errBody, false, errBody);
                 }
@@ -150,8 +172,19 @@ public class ApiService {
                 }
 
                 ChatCompletionResult result = new ChatCompletionResult(assistantMsg);
+                result.trimmed = trimmed;
+                if (maxRetryUsed) {
+                    result.notice = "中转站不支持 max 等级，已降级为 high";
+                }
                 parseStream(bodyStream.source(), assistantMsg, model, result);
-                callback.onSuccess(result);
+
+                if (result.interrupted) {
+                    if (isEmpty(assistantMsg.content, assistantMsg.reasoningRaw)) {
+                        throw new ApiError("生成中断：连接提前关闭");
+                    }
+                    assistantMsg.setAsError(); // B4：保留已收到部分并标记中断
+                }
+                postSuccess(callback, result);
             }
 
         } catch (ApiError e) {
@@ -179,11 +212,6 @@ public class ApiService {
         return true;
     }
 
-    private JsonObject buildRequestBody(ModelDef model, ThinkingLevel level, List<Message> history,
-                                        Message currentUserMessage) {
-        return new JsonObject();
-    }
-
     private JsonArray buildMessages(ModelDef model, List<Message> allMessages, Message currentUserMessage) {
         JsonArray messages = new JsonArray();
 
@@ -204,10 +232,8 @@ public class ApiService {
                 if (m.toolCalls != null && m.toolCalls.size() > 0 && hasMatchingToolResponses(m, allMessages)) {
                     messageJson.add("tool_calls", m.toolCalls);
                 }
-                // reasoning_content 按模型开关（A1）
-                if (model.keepReasoningInHistory && m.reasoningRaw != null && m.reasoningRaw.length() > 0) {
-                    messageJson.addProperty("reasoning_content", m.reasoningRaw);
-                }
+                // 步骤7：第一版不携带 tools 参数，历史 assistant 无需回传 reasoning_content
+                // （工具调用阶段再启用；ModelDef.keepReasoningInHistory 与 400 自愈逻辑已保留）
                 messages.add(messageJson);
                 continue;
             }
@@ -342,23 +368,66 @@ public class ApiService {
         return tools;
     }
 
-    /** SSE 流式解析 */
+    /** 提取流式 chunk 中的 error 对象信息（步骤4） */
+    private String extractChunkError(JsonObject chunk) {
+        JsonElement err = chunk.get("error");
+        if (err.isJsonObject() && err.getAsJsonObject().has("message")
+                && !err.getAsJsonObject().get("message").isJsonNull()) {
+            return err.getAsJsonObject().get("message").getAsString();
+        }
+        if (err.isJsonPrimitive()) {
+            return err.getAsString();
+        }
+        return err.toString();
+    }
+
+    /** SSE 流式解析（步骤4：处理 [DONE] / finish_reason / 流中 error 对象，标记截断与中断） */
     private void parseStream(okio.BufferedSource source, Message assistantMsg, ModelDef model,
                              ChatCompletionResult result) throws ApiError, IOException {
         String line;
+        boolean receivedDone = false;
+        String lastFinishReason = null;
+
         while ((line = source.readUtf8Line()) != null) {
             if (!line.startsWith("data:")) continue;
             String jsonData = line.substring(5).trim();
-            if ("[DONE]".equals(jsonData)) break;
-            try {
-                JsonObject chunk = JsonParser.parseString(jsonData).getAsJsonObject();
-                if (!chunk.has("choices")) continue;
-                JsonArray choices = chunk.getAsJsonArray("choices");
-                if (choices == null || choices.size() == 0) continue;
-                JsonObject delta = choices.get(0).getAsJsonObject().getAsJsonObject("delta");
-                if (delta == null) continue;
+            if ("[DONE]".equals(jsonData)) {
+                receivedDone = true;
+                break;
+            }
 
-                if (delta.has("reasoning_content")) {
+            JsonObject chunk;
+            try {
+                chunk = JsonParser.parseString(jsonData).getAsJsonObject();
+            } catch (Exception e) {
+                Log.e(TAG, "parse stream chunk", e);
+                continue;
+            }
+
+            // 流中错误对象（步骤4）：{"error":{"message":...}}
+            if (chunk.has("error") && !chunk.get("error").isJsonNull()) {
+                throw new ApiError(extractChunkError(chunk), false, chunk.toString());
+            }
+
+            if (!chunk.has("choices")) continue;
+            JsonArray choices = chunk.getAsJsonArray("choices");
+            if (choices == null || choices.size() == 0) continue;
+
+            try {
+                JsonObject choice = choices.get(0).getAsJsonObject();
+
+                JsonElement finishReason = choice.get("finish_reason");
+                if (finishReason != null && !finishReason.isJsonNull()) {
+                    lastFinishReason = finishReason.getAsString();
+                }
+
+                JsonElement deltaEl = choice.get("delta");
+                if (deltaEl == null || deltaEl.isJsonNull() || !deltaEl.isJsonObject()) {
+                    continue;
+                }
+                JsonObject delta = deltaEl.getAsJsonObject();
+
+                if (delta.has("reasoning_content") && !delta.get("reasoning_content").isJsonNull()) {
                     assistantMsg.appendReasoning(delta.get("reasoning_content").getAsString());
                 }
                 if (delta.has("content") && !delta.get("content").isJsonNull()) {
@@ -406,7 +475,15 @@ public class ApiService {
             assistantMsg.toolCalls = toolCalls;
         }
 
-        result.finished = true;
+        // 流结束判定（步骤4）：收到 [DONE] 或服务器给出终止 finish_reason 视为正常完成；
+        // 两者都没有则视为连接中断（B4）
+        if (receivedDone || lastFinishReason != null) {
+            result.finished = true;
+        } else {
+            result.interrupted = true;
+        }
+        if ("length".equals(lastFinishReason)) result.truncated = true;
+        if ("content_filter".equals(lastFinishReason)) result.filtered = true;
     }
 
     private Message.StreamToolCall findOrCreateToolCall(Message msg, String id, int index) {
@@ -464,11 +541,16 @@ public class ApiService {
         mainHandler.post(() -> callback.onError(error));
     }
 
-    /** chatCompletion 结果：包含 assistant 消息和工具调用列表 */
+    /** chatCompletion 结果：包含 assistant 消息与流结束标记 */
     public static class ChatCompletionResult {
         public final Message assistantMessage;
         public final List<Message.StreamToolCall> toolCalls = new ArrayList<>();
-        public boolean finished = false;
+        public boolean finished = false;    // 流正常结束（[DONE] 或收到 finish_reason）
+        public boolean trimmed = false;     // 上下文发生裁剪（步骤17：UI 轻提示）
+        public boolean truncated = false;   // finish_reason=length，因长度截断（步骤4）
+        public boolean filtered = false;    // finish_reason=content_filter，内容被过滤（步骤4）
+        public boolean interrupted = false; // 流中断：未收到 [DONE] 且无 finish_reason（步骤4）
+        public String notice;               // 一次性提示（如 MAX 自动降级，步骤5）
 
         public ChatCompletionResult(Message assistantMessage) {
             this.assistantMessage = assistantMessage;

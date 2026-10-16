@@ -46,7 +46,7 @@ public class ConfigManager {
         c.defaultModelId = preferences.getString(KEY_DEFAULT_MODEL, "");
         c.systemPrompt = preferences.getString(KEY_SYSTEM_PROMPT, "");
         c.shrinkThink = preferences.getBoolean(KEY_SHRINK_THINK, false);
-        c.newapiDialect = preferences.getBoolean(KEY_NEWAPI_DIALECT, false);
+        c.newapiDialect = preferences.getBoolean(KEY_NEWAPI_DIALECT, true); // 步骤5：默认按 NewAPI 方言
         return c;
     }
 
@@ -67,6 +67,11 @@ public class ConfigManager {
 
     public boolean isValid() {
         return config.isValid();
+    }
+
+    /** 步骤9：拉取模型只需要中转地址与 Key */
+    public boolean isValidForFetch() {
+        return config.isValidForFetch();
     }
 
     public void updateBaseUrl(String v) { config.baseUrl = v; save(); }

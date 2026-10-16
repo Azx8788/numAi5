@@ -12,6 +12,8 @@ public class ModelDef {
     public String id;
     public String displayName;
     public String providerId;
+    /** /models 返回的原始 id（可能带前缀，如 anthropic/xxx）；请求时优先使用（步骤8） */
+    public String rawId;
     public boolean supportsThinking;
     public boolean supportsVision;
     public boolean supportsTools = true;
@@ -30,6 +32,12 @@ public class ModelDef {
         this.providerId = providerId;
         this.supportsThinking = supportsThinking;
         this.supportsVision = supportsVision;
+        this.rawId = id; // 预设模型无前缀（步骤8）；/models 拉取来的会覆盖为原始 id
+    }
+
+    /** 请求用 id（步骤8）：有原始 id 时用原始 id，否则用剥前缀 id */
+    public String requestId() {
+        return (rawId != null && rawId.length() > 0) ? rawId : id;
     }
 
     /** Builder 风格设置兼容开关 */
