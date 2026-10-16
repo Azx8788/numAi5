@@ -50,6 +50,10 @@
     <string name="provider_name">名称（如 DeepSeek 官转）</string>
     <string name="base_url_hint">中转站地址（https://…/v1）</string>
     <string name="api_key">API Key</string>
+    <string name="paste">粘贴</string>
+    <string name="show_key">显示</string>
+    <string name="hide_key">隐藏</string>
+    <string name="clipboard_empty">剪贴板为空</string>
     <string name="provider_not_configured">未配置地址或 Key（点击编辑）</string>
     <string name="provider_no_key">未填写 Key</string>
     <string name="provider_models_format">模型 %1$d</string>

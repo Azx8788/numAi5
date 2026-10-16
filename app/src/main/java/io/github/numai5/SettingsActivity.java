@@ -1,8 +1,12 @@
 package io.github.numai5;
 
+import android.content.ClipData;
+import android.content.ClipboardManager;
+import android.content.Context;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Bundle;
+import android.text.method.PasswordTransformationMethod;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.widget.Button;
@@ -260,10 +264,23 @@ public class SettingsActivity extends AppCompatActivity {
         final EditText editName = content.findViewById(R.id.dialogProviderName);
         final EditText editBaseUrl = content.findViewById(R.id.dialogProviderBaseUrl);
         final EditText editApiKey = content.findViewById(R.id.dialogProviderApiKey);
+        final Button btnPasteApiKey = content.findViewById(R.id.btnPasteApiKey);
+        final Button btnToggleApiKey = content.findViewById(R.id.btnToggleApiKey);
 
         editName.setText(provider.name);
         editBaseUrl.setText(provider.baseUrl);
         editApiKey.setText(provider.apiKey);
+
+        // Key 默认遮罩显示；这里用代码施加遮罩，而不是 inputType="textPassword"，
+        // 以免触发系统安全键盘（它会禁用粘贴，长 Key 根本没法输入）
+        final boolean[] keyVisible = {false};
+        applyKeyMask(editApiKey, false);
+        btnToggleApiKey.setOnClickListener(v -> {
+            keyVisible[0] = !keyVisible[0];
+            applyKeyMask(editApiKey, keyVisible[0]);
+            btnToggleApiKey.setText(keyVisible[0] ? R.string.hide_key : R.string.show_key);
+        });
+        btnPasteApiKey.setOnClickListener(v -> pasteFromClipboard(editApiKey));
 
         new AlertDialog.Builder(this)
                 .setTitle(R.string.edit_provider)
@@ -286,6 +303,33 @@ public class SettingsActivity extends AppCompatActivity {
                 .setNegativeButton(R.string.delete, (dialog, which) ->
                         confirmDeleteProvider(provider))
                 .show();
+    }
+
+    /** 用 TransformationMethod 控制遮罩：不影响输入、不触发安全键盘，粘贴照常可用 */
+    private void applyKeyMask(EditText editText, boolean visible) {
+        editText.setTransformationMethod(visible ? null : PasswordTransformationMethod.getInstance());
+        editText.setSelection(editText.getText().length());
+    }
+
+    /** 一键粘贴：避免在老设备上长按选择「粘贴」的麻烦 */
+    private void pasteFromClipboard(EditText target) {
+        ClipboardManager manager = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+        if (manager == null || !manager.hasPrimaryClip()) {
+            Toast.makeText(this, R.string.clipboard_empty, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        ClipData clip = manager.getPrimaryClip();
+        if (clip == null || clip.getItemCount() == 0) {
+            Toast.makeText(this, R.string.clipboard_empty, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        CharSequence text = clip.getItemAt(0).coerceToText(this);
+        if (text == null || text.length() == 0) {
+            Toast.makeText(this, R.string.clipboard_empty, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        target.setText(text.toString().trim());
+        target.setSelection(target.getText().length());
     }
 
     private void confirmDeleteProvider(final Provider provider) {

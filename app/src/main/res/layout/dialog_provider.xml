@@ -22,14 +22,52 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
             android:hint="@string/base_url_hint"
+            android:imeOptions="actionNext"
             android:inputType="textUri" />
 
-        <EditText
-            android:id="@+id/dialogProviderApiKey"
+        <!--
+          API Key 故意不用 inputType="textPassword"：
+          该标志会让部分 ROM（华为/小米等）弹出「安全键盘」，通常禁用粘贴与联想，
+          而 API Key 是一长串随机字符，必须能粘贴。
+          这里改用 textNoSuggestions（不进输入法缓存、无联想），
+          显示遮罩由代码用 PasswordTransformationMethod 施加，并提供「显示」开关与「粘贴」按钮。
+        -->
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
-            android:hint="@string/api_key"
-            android:inputType="textPassword" />
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <EditText
+                android:id="@+id/dialogProviderApiKey"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:hint="@string/api_key"
+                android:imeOptions="actionDone"
+                android:inputType="textNoSuggestions"
+                android:maxLines="1" />
+
+            <Button
+                android:id="@+id/btnPasteApiKey"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="4dp"
+                android:minWidth="0dp"
+                android:paddingStart="10dp"
+                android:paddingEnd="10dp"
+                android:text="@string/paste" />
+
+            <Button
+                android:id="@+id/btnToggleApiKey"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="4dp"
+                android:minWidth="0dp"
+                android:paddingStart="10dp"
+                android:paddingEnd="10dp"
+                android:text="@string/show_key" />
+        </LinearLayout>
     </LinearLayout>
 </ScrollView>
