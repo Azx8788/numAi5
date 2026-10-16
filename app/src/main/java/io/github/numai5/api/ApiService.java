@@ -586,12 +586,13 @@ public class ApiService {
         return stc;
     }
 
-    /** 拉取指定供应商的模型列表，并合并进该供应商（其余供应商不受影响） */
+    /** 拉取指定供应商的模型列表（只解析、不落库，由调用方决定添加哪些） */
     public void getModels(Provider provider, ApiCallback<List<ModelDef>> callback) {
         if (provider == null) {
             postError(callback, new ApiError("未指定供应商"));
             return;
         }
+        final String url = provider.normalizedBaseUrl() + "/models";
         new Thread(() -> {
             try {
                 ApiRequest request = new ApiRequest("/models", "GET")
@@ -601,10 +602,29 @@ public class ApiService {
                     postError(callback, new ApiError(response.errorBody));
                     return;
                 }
-                JsonObject obj = JsonParser.parseString(response.body).getAsJsonObject();
-                JsonArray data = obj.getAsJsonArray("data");
+
+                // 宽松解析：部分站点返回的 JSON 并不规范（未加引号的键等），严格模式会直接抛
+                // "Use JsonReader.setLenient(true)..."；真的不是 JSON（如 HTML 错误页）时给出可定位提示
+                JsonElement root;
+                try {
+                    root = JsonUtil.parseLenient(response.body);
+                } catch (Exception parseFailure) {
+                    postError(callback, new ApiError(
+                            describeBadModelsResponse(url, response, "返回内容不是有效的 JSON")));
+                    return;
+                }
+                if (root == null || !root.isJsonObject()) {
+                    postError(callback, new ApiError(
+                            describeBadModelsResponse(url, response, "响应不是 JSON 对象")));
+                    return;
+                }
+                JsonArray data = root.getAsJsonObject().getAsJsonArray("data");
+                if (data == null) {
+                    postError(callback, new ApiError(describeBadModelsResponse(url, response,
+                            "响应里没有 data 数组（该站可能不支持 /models）")));
+                    return;
+                }
                 List<ModelDef> models = ModelCatalog.getInstance().parseModelsEndpoint(data, provider.id);
-                // 只解析、不落库：由调用方（设置页）弹出挑选对话框后决定添加哪些模型
                 postSuccess(callback, models);
             } catch (ApiError e) {
                 postError(callback, e);
@@ -612,6 +632,18 @@ public class ApiService {
                 postError(callback, new ApiError(e.getMessage()));
             }
         }).start();
+    }
+
+    /** 拉取模型失败时拼装可读原因：请求地址 + HTTP 状态 + 实际返回片段（疑似非 JSON 时附检查建议） */
+    private String describeBadModelsResponse(String url, ApiResponse response, String reason) {
+        StringBuilder sb = new StringBuilder(reason);
+        sb.append("；请求 ").append(url)
+                .append(" 返回（HTTP ").append(response.statusCode).append("）：")
+                .append(JsonUtil.snippet(response.body));
+        if (!JsonUtil.looksLikeJson(response.body)) {
+            sb.append("。请检查中转地址是否以 /v1 结尾、该站是否提供 /models 接口");
+        }
+        return sb.toString();
     }
 
     private String trimSlash(String url) {
