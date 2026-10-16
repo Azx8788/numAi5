@@ -22,9 +22,4 @@ public class Config {
         }
         return false;
     }
-
-    public boolean isValid() {
-        return isValidForFetch()
-                && defaultModelId != null && defaultModelId.length() > 0;
-    }
 }

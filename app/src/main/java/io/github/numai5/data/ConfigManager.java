@@ -108,10 +108,6 @@ public class ConfigManager {
         return config;
     }
 
-    public boolean isValid() {
-        return config.isValid();
-    }
-
     public boolean isValidForFetch() {
         return config.isValidForFetch();
     }
@@ -132,7 +128,9 @@ public class ConfigManager {
 
     /**
      * 按 uid（供应商 id + "/" + 模型 id）查找模型所属供应商。
-     * 参数也可以是不含 "/" 的旧格式模型名——按名字在全部供应商中取第一个匹配项（兼容旧数据）。
+     * 参数也可以是不含 "/" 的旧格式模型名——按名字在全部供应商中查找，
+     * 并优先命中「已配置地址与 Key」的供应商，避免预设供应商（地址留空）的同名模型
+     * 把用户自己配置好的模型挡掉。
      */
     public Provider findProviderOfModel(String uid) {
         if (uid == null) return null;
@@ -146,16 +144,20 @@ public class ConfigManager {
                 }
             }
         }
+        Provider fallback = null;
         for (Provider p : config.providers) {
             if (p.models == null) continue;
             for (ModelDef m : p.models) {
-                if (uid.equals(m.id)) return p;
+                if (uid.equals(m.id)) {
+                    if (p.isValidForFetch()) return p;
+                    if (fallback == null) fallback = p;
+                }
             }
         }
-        return null;
+        return fallback;
     }
 
-    /** 按 uid 查找模型；同样兼容不含 "/" 的旧格式模型名 */
+    /** 按 uid 查找模型；旧格式（纯模型名）同样优先命中已配置地址与 Key 的供应商 */
     public ModelDef findModel(String uid) {
         if (uid == null) return null;
         int idx = uid.lastIndexOf('/');
@@ -168,13 +170,17 @@ public class ConfigManager {
                 }
             }
         }
+        ModelDef fallback = null;
         for (Provider p : config.providers) {
             if (p.models == null) continue;
             for (ModelDef m : p.models) {
-                if (uid.equals(m.id)) return m;
+                if (uid.equals(m.id)) {
+                    if (p.isValidForFetch()) return m;
+                    if (fallback == null) fallback = m;
+                }
             }
         }
-        return null;
+        return fallback;
     }
 
     /** 新增供应商（自动分配 id） */

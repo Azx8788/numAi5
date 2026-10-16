@@ -291,10 +291,6 @@ public class MainActivity extends AppCompatActivity implements StreamSession.Lis
             toast(getString(R.string.generating));
             return;
         }
-        if (!configManager.isValid()) {
-            toast(getString(R.string.config_invalid));
-            return;
-        }
         String text = inputText.getText().toString().trim();
         List<String> images = new ArrayList<>(pendingImages);
         if (text.length() == 0 && images.isEmpty()) return;
@@ -303,7 +299,18 @@ public class MainActivity extends AppCompatActivity implements StreamSession.Lis
         ModelDef lockedModel = pendingModel;
         ThinkingLevel lockedLevel = pendingLevel;
         if (lockedModel == null) {
-            toast(getString(R.string.config_invalid));
+            toast(getString(R.string.select_model_first));
+            return;
+        }
+        // 发送前提是「所选模型所属的供应商」已配置地址与 Key；
+        // 不要求先设置默认模型（默认模型只决定初始选择，临时选择同样可以发送）
+        Provider sendProvider = ModelCatalog.getInstance().findProviderOfModel(lockedModel.uid());
+        if (sendProvider == null) {
+            toast(getString(R.string.provider_missing_for_model));
+            return;
+        }
+        if (!sendProvider.isValidForFetch()) {
+            toast(getString(R.string.provider_not_ready_format, sendProvider.displayName()));
             return;
         }
         if (!images.isEmpty() && !lockedModel.supportsVision) {
@@ -745,10 +752,10 @@ public class MainActivity extends AppCompatActivity implements StreamSession.Lis
 
     private void setPendingAsDefault() {
         if (pendingModel == null) {
-            toast(getString(R.string.config_invalid));
+            toast(getString(R.string.select_model_first));
             return;
         }
-        configManager.updateDefaultModel(pendingModel.id);
+        configManager.updateDefaultModel(pendingModel.uid());
         refreshDefaultModel();
         updateModelButton();
         toast(getString(R.string.set_default_success));
@@ -762,7 +769,7 @@ public class MainActivity extends AppCompatActivity implements StreamSession.Lis
         // 设置页返回：若此前跟随默认模型则更新为新默认；已有临时选择则保留
         ModelDef previousDefault = defaultModel;
         refreshDefaultModel();
-        if (pendingModel == null || (previousDefault != null && pendingModel.id.equals(previousDefault.id))) {
+        if (pendingModel == null || (previousDefault != null && pendingModel.uid().equals(previousDefault.uid()))) {
             pendingModel = defaultModel;
         }
         updateModelButton();
