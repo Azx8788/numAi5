@@ -18,7 +18,8 @@ import java.io.IOException;
  */
 public class ImageCompressor {
     private static final String TAG = "ImageCompressor";
-    private static final int MAX_SIZE = 1080;
+    /** 采样解码与压缩共同的目标上限（步骤14） */
+    public static final int MAX_SIZE = 1080;
     private static final int JPEG_QUALITY = 80;
 
     public static File getImagesDir(Context context) {

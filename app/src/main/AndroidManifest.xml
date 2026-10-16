@@ -29,5 +29,16 @@
         <activity
             android:name=".SettingsActivity"
             android:windowSoftInputMode="stateHidden" />
+
+        <!-- 步骤13：拍照全尺寸照片经 FileProvider 输出到 filesDir/images -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
     </application>
 </manifest>

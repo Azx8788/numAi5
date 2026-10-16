@@ -1,25 +1,32 @@
 package io.github.numai5.data;
 
 import android.content.Context;
+import android.util.AtomicFile;
 import android.util.Log;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonSyntaxException;
 import java.io.File;
-import java.io.FileReader;
-import java.io.FileWriter;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import io.github.numai5.model.Chat;
 import io.github.numai5.model.Message;
 import io.github.numai5.model.Role;
 
 /**
- * 聊天数据管理：当前会话、历史列表、Gson 文件持久化（numAi 风格）。
+ * 聊天数据管理：当前会话、历史列表、Gson 文件持久化。
+ * 步骤16：写入改用 AtomicFile（临时文件 + rename，写入中崩溃不损坏原文件）；
+ * 文件 IO 在后台单线程串行执行，主线程只做序列化快照（聊天集合仅在主线程增删）。
  */
 public class ChatManager {
     private static final String TAG = "ChatManager";
@@ -28,6 +35,7 @@ public class ChatManager {
     private static ChatManager instance;
     private final Context appContext;
     private final List<Chat> chats = new ArrayList<>();
+    private final ExecutorService saveExecutor = Executors.newSingleThreadExecutor();
     private Chat currentChat;
 
     private ChatManager(Context context) {
@@ -61,10 +69,10 @@ public class ChatManager {
     }
 
     public void startNewChat() {
-            Chat chat = new Chat(UUID.randomUUID().toString(), "", System.currentTimeMillis());
-            this.currentChat = chat;
-            chats.add(chat);
-        }
+        Chat chat = new Chat(UUID.randomUUID().toString(), "", System.currentTimeMillis());
+        this.currentChat = chat;
+        chats.add(chat);
+    }
 
     public List<Chat> getChats() {
         return new ArrayList<>(chats);
@@ -107,7 +115,7 @@ public class ChatManager {
 
     private String generateTitle(String text) {
         if (text == null) return "新对话";
-        String t = text.trim().replaceAll("\s+", " ");
+        String t = text.trim().replaceAll("\\s+", " ");
         if (t.length() > 20) t = t.substring(0, 20) + "...";
         return t;
     }
@@ -116,11 +124,24 @@ public class ChatManager {
         return new GsonBuilder().setPrettyPrinting().create();
     }
 
+    /** 序列化快照（调用线程）+ 后台原子写入（步骤16） */
     public void saveAll() {
-        File file = new File(appContext.getFilesDir(), CHATS_FILE);
-        try (FileWriter writer = new FileWriter(file)) {
-            gson().toJson(chats, writer);
+        final String json = gson().toJson(chats);
+        saveExecutor.execute(() -> writeToFile(json));
+    }
+
+    /** AtomicFile 原子写入：写临时文件成功后 rename；失败则恢复原文件 */
+    private void writeToFile(String json) {
+        AtomicFile atomicFile = new AtomicFile(new File(appContext.getFilesDir(), CHATS_FILE));
+        FileOutputStream fos = null;
+        try {
+            fos = atomicFile.startWrite();
+            fos.write(json.getBytes(StandardCharsets.UTF_8));
+            atomicFile.finishWrite(fos);
         } catch (IOException e) {
+            if (fos != null) {
+                atomicFile.failWrite(fos);
+            }
             Log.e(TAG, "save chats failed", e);
         }
     }
@@ -129,7 +150,8 @@ public class ChatManager {
     private void loadAll() {
         File file = new File(appContext.getFilesDir(), CHATS_FILE);
         if (!file.exists()) return;
-        try (FileReader reader = new FileReader(file)) {
+        try (InputStreamReader reader = new InputStreamReader(
+                new FileInputStream(file), StandardCharsets.UTF_8)) {
             List<Chat> loaded = gson().fromJson(reader, new com.google.gson.reflect.TypeToken<List<Chat>>() {}.getType());
             if (loaded != null) {
                 chats.addAll(loaded);

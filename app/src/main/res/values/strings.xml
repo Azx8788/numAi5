@@ -38,4 +38,5 @@
     <string name="camera_permission_denied">未授予相机权限</string>
     <string name="ctx_trimmed">对话较长，已截断较早的历史上下文</string>
     <string name="content_filtered">回复被内容过滤器截断</string>
+    <string name="remove_images_format">🖼×%1$d · 清除</string>
 </resources>

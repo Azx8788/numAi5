@@ -12,6 +12,7 @@ import android.view.inputmethod.EditorInfo;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.ImageButton;
+import android.widget.TextView;
 import android.widget.Toast;
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AlertDialog;
@@ -59,7 +60,7 @@ public class MainActivity extends AppCompatActivity implements StreamSession.Lis
     private Button btnThinking;
     private ImageButton btnSend;
     private ImageButton btnImage;
-    private ImageButton btnRemoveImage;
+    private TextView btnRemoveImage;
 
     private ChatManager chatManager;
     private ConfigManager configManager;
@@ -308,7 +309,13 @@ public class MainActivity extends AppCompatActivity implements StreamSession.Lis
     }
 
     private void updateRemoveImageButton() {
-        btnRemoveImage.setVisibility(pendingImages.isEmpty() ? View.GONE : View.VISIBLE);
+        if (pendingImages.isEmpty()) {
+            btnRemoveImage.setVisibility(View.GONE);
+        } else {
+            // 步骤15：显示当前附件数量，点击清空
+            btnRemoveImage.setText(getString(R.string.remove_images_format, pendingImages.size()));
+            btnRemoveImage.setVisibility(View.VISIBLE);
+        }
     }
 
     private void refreshDefaultModel() {
