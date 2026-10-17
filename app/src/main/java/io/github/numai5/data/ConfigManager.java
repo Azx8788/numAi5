@@ -26,6 +26,8 @@ public class ConfigManager {
     private static final String KEY_SHRINK_THINK = "shrinkThink";
     private static final String KEY_NEWAPI_DIALECT = "newapiDialect";
     private static final String KEY_TOOL_ORDER = "toolOrder";
+    /** 魔搭预设是否已补入（只补一次，避免用户删除后又被加回） */
+    private static final String KEY_MODELSCOPE_PRESET = "modelscopePresetAdded";
     // 旧版字段（仅用于一次性迁移）
     private static final String KEY_OLD_BASE_URL = "baseUrl";
     private static final String KEY_OLD_API_KEY = "apiKey";
@@ -82,6 +84,16 @@ public class ConfigManager {
         // 首次启动：预置常见供应商（地址与 Key 留空，由用户填写）
         if (c.providers.isEmpty()) {
             c.providers.addAll(PresetModels.createDefaultProviders());
+        } else if (!preferences.getBoolean(KEY_MODELSCOPE_PRESET, false)
+                && findProviderIn(c.providers, "p4") == null) {
+            // 老配置升级：补一次魔搭供应商（只补一次，用户删掉后不会再自动加回）
+            for (Provider preset : PresetModels.createDefaultProviders()) {
+                if ("p4".equals(preset.id)) {
+                    c.providers.add(preset);
+                    preferences.edit().putBoolean(KEY_MODELSCOPE_PRESET, true).apply();
+                    break;
+                }
+            }
         }
         for (Provider p : c.providers) {
             if (p.models == null) p.models = new ArrayList<>();
@@ -113,6 +125,14 @@ public class ConfigManager {
     }
 
     // ===== 供应商 =====
+
+    private static Provider findProviderIn(List<Provider> providers, String id) {
+        if (providers == null) return null;
+        for (Provider p : providers) {
+            if (p != null && id.equals(p.id)) return p;
+        }
+        return null;
+    }
 
     public List<Provider> getProviders() {
         return config.providers;

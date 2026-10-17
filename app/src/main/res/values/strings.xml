@@ -49,6 +49,8 @@
 
     <!-- 多供应商 -->
     <string name="provider_list">供应商</string>
+    <string name="provider_badge_modelscope">[生图异步]</string>
+    <string name="modelscope_token_hint">魔搭访问令牌（ms- 开头，账号设置 → 访问令牌）</string>
     <string name="provider_hint">每个供应商独立配置中转地址与 Key，每个站点的模型互不影响；个数不限。</string>
     <string name="add_provider">+ 添加供应商</string>
     <string name="edit_provider">编辑供应商</string>

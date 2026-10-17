@@ -27,6 +27,7 @@ import io.github.numai5.model.Message;
 import io.github.numai5.model.Role;
 import io.github.numai5.model.ThinkingLevel;
 import io.github.numai5.provider.ModelCatalog;
+import io.github.numai5.provider.ModelscopePresets;
 import io.github.numai5.provider.ModelDef;
 import io.github.numai5.provider.Provider;
 import io.github.numai5.thinking.ThinkingMapper;
@@ -695,6 +696,19 @@ public class ApiService {
                     return;
                 }
                 List<ModelDef> models = ModelCatalog.getInstance().parseModelsEndpoint(data, provider.id);
+                if (provider.isModelScope()) {
+                    // 魔搭 /v1/models 只返回对话模型，生图模型不在其中，这里补进候选列表
+                    for (ModelDef image : ModelscopePresets.imageModels(provider.id)) {
+                        boolean exists = false;
+                        for (ModelDef m : models) {
+                            if (image.id != null && image.id.equals(m.id)) {
+                                exists = true;
+                                break;
+                            }
+                        }
+                        if (!exists) models.add(image);
+                    }
+                }
                 postSuccess(callback, models);
             } catch (ApiError e) {
                 postError(callback, e);

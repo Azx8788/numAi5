@@ -68,7 +68,13 @@ public final class ErrorMapper {
             return withDetail("该模型只支持 /v1/responses 接口，本应用暂不支持；请改用其它模型"
                     + "（如 deepseek、claude 系）", httpCode, code, detail);
         }
-        if (isModelMissing(all)) {
+        if (all.contains("authentication failed") || all.contains("valid modelscope token")) {
+            return withDetail("访问令牌无效：请到魔搭「账号设置 → 访问令牌」重新生成并填入", httpCode, code, detail);
+        }
+        if (all.contains("please bind") && all.contains("alibaba")) {
+            return withDetail("该魔搭账号尚未绑定阿里云账号，请先在魔搭完成绑定后再调用", httpCode, code, detail);
+        }
+        if (all.contains("model not exists") || isModelMissing(all)) {
             return withDetail("模型不可用：该站没有此模型或当前无可用渠道，请重新拉取模型并另选一个", httpCode, code, detail);
         }
         if (isContextTooLong(all)) {
@@ -120,7 +126,8 @@ public final class ErrorMapper {
         return all.contains("invalid_api_key") || all.contains("invalid api key")
                 || all.contains("incorrect api key") || all.contains("unauthorized")
                 || all.contains("unauthenticated") || all.contains("authentication")
-                || all.contains("api key not valid") || all.contains("invalid key");
+                || all.contains("api key not valid") || all.contains("invalid key")
+                || all.contains("authentication failed") || all.contains("valid modelscope token");
     }
 
     private static boolean isModelMissing(String all) {
@@ -150,7 +157,9 @@ public final class ErrorMapper {
             JsonElement root = JsonUtil.parseLenient(body);
             if (root != null && root.isJsonObject()) {
                 JsonObject obj = root.getAsJsonObject();
+                // 魔搭用 errors（复数），OpenAI 系用 error（单数）
                 String nested = nestedMessage(obj.get("error"));
+                if (nested == null) nested = nestedMessage(obj.get("errors"));
                 if (nested != null) return nested;
                 String msg = primitive(obj.get("message"));
                 if (msg != null) return msg;
@@ -172,6 +181,7 @@ public final class ErrorMapper {
             if (root != null && root.isJsonObject()) {
                 JsonObject obj = root.getAsJsonObject();
                 JsonElement err = obj.get("error");
+                if (err == null || !err.isJsonObject()) err = obj.get("errors");
                 if (err != null && err.isJsonObject()) {
                     JsonObject errObj = err.getAsJsonObject();
                     String c = primitive(errObj.get("code"));

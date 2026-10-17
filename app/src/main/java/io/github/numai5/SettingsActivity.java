@@ -242,7 +242,9 @@ public class SettingsActivity extends AppCompatActivity {
             TextView info = row.findViewById(R.id.providerInfo);
             TextView models = row.findViewById(R.id.providerModels);
 
-            name.setText(p.displayName());
+            name.setText(p.isModelScope()
+                    ? p.displayName() + "  " + getString(R.string.provider_badge_modelscope)
+                    : p.displayName());
             String url = p.normalizedBaseUrl();
             if (url.length() == 0) {
                 info.setText(R.string.provider_not_configured);

@@ -45,6 +45,15 @@ public class PresetModels {
                 .tools(true));
         list.add(qwen);
 
+        // 魔搭社区：官方固定地址，用户只需填访问令牌（ms- 开头）。
+        // 生图模型不在 /v1/models 返回里，单独内置（见 ModelscopePresets）。
+        Provider modelscope = new Provider("p4", "魔搭 ModelScope");
+        modelscope.type = Provider.TYPE_MODELSCOPE;
+        modelscope.baseUrl = "https://api-inference.modelscope.cn/v1";
+        modelscope.models.addAll(ModelscopePresets.chatModels());
+        modelscope.models.addAll(ModelscopePresets.imageModels());
+        list.add(modelscope);
+
         return list;
     }
 }

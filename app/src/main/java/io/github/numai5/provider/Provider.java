@@ -13,6 +13,15 @@ public class Provider {
     public String baseUrl = "";
     public String apiKey = "";
     public List<ModelDef> models = new ArrayList<>();
+    /**
+     * 供应商类型，决定生图等非对话接口的调用方式：
+     * - {@link #TYPE_OPENAI}（默认）：OpenAI 兼容，生图走同步 /images/generations
+     * - {@link #TYPE_MODELSCOPE}：魔搭社区，生图必须走「提交任务 + 轮询」的异步流程
+     */
+    public String type = TYPE_OPENAI;
+
+    public static final String TYPE_OPENAI = "openai";
+    public static final String TYPE_MODELSCOPE = "modelscope";
 
     public Provider() {
     }
@@ -26,6 +35,11 @@ public class Provider {
     public boolean isValidForFetch() {
         return baseUrl != null && baseUrl.length() > 0
                 && apiKey != null && apiKey.length() > 0;
+    }
+
+    /** 是否为魔搭（异步生图、errors 复数错误结构等差异按此判断） */
+    public boolean isModelScope() {
+        return TYPE_MODELSCOPE.equalsIgnoreCase(type);
     }
 
     /** 去掉地址末尾斜杠 */
