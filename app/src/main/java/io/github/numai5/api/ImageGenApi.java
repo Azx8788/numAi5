@@ -103,7 +103,7 @@ public class ImageGenApi {
         String submitUrl = base + "/images/generations";
         Request.Builder submitBuilder = new Request.Builder()
                 .url(submitUrl)
-                .header("Authorization", "Bearer " + provider.apiKey)
+                .header("Authorization", "Bearer " + ApiAuth.sanitize(provider.apiKey))
                 .header("Content-Type", "application/json")
                 .header("X-ModelScope-Async-Mode", "true");
         ApiCompatHeaders.apply(submitBuilder, submitUrl);
@@ -147,7 +147,7 @@ public class ImageGenApi {
 
             Request.Builder pollBuilder = new Request.Builder()
                     .url(taskUrl)
-                    .header("Authorization", "Bearer " + provider.apiKey)
+                    .header("Authorization", "Bearer " + ApiAuth.sanitize(provider.apiKey))
                     .header("X-ModelScope-Task-Type", "image_generation");
             ApiCompatHeaders.apply(pollBuilder, taskUrl);
             String text;
@@ -277,7 +277,7 @@ public class ImageGenApi {
         String url = provider.normalizedBaseUrl() + "/images/generations";
         Request.Builder requestBuilder = new Request.Builder()
                 .url(url)
-                .header("Authorization", "Bearer " + provider.apiKey)
+                .header("Authorization", "Bearer " + ApiAuth.sanitize(provider.apiKey))
                 .header("Content-Type", "application/json");
         // 已知会对客户端做指纹校验的站点（如 agentrouter.org），自动补上兼容头
         ApiCompatHeaders.apply(requestBuilder, url);

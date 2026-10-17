@@ -43,13 +43,18 @@ public class ModelSelectorSheet extends BottomSheetDialogFragment {
         String defaultModelId = ConfigManager.getInstance(getContext()).getConfig().defaultModelId;
 
         // 按供应商分组（每个供应商一个分组标题）
+        // 只列对话模型：绘图模型（🎨）在「AI 绘图」页里单独选，避免在这里误选后对话失败
         items.clear();
         List<Provider> providers = ModelCatalog.getInstance().getProviders();
         for (Provider p : providers) {
             List<ModelDef> models = ModelCatalog.getInstance().getModelsByProvider(p.id);
-            if (models.isEmpty()) continue;
+            List<ModelDef> chatModels = new ArrayList<>();
+            for (ModelDef m : models) {
+                if (!m.isImageGen()) chatModels.add(m);
+            }
+            if (chatModels.isEmpty()) continue;
             items.add(p.displayName());
-            items.addAll(models);
+            items.addAll(chatModels);
         }
         if (items.isEmpty()) {
             items.add(getString(R.string.no_models_hint));
@@ -125,8 +130,8 @@ public class ModelSelectorSheet extends BottomSheetDialogFragment {
                 name.setText(model.displayName);
                 StringBuilder sb = new StringBuilder();
                 sb.append(model.id);
-                if (model.supportsThinking) sb.append("  🧠");
-                if (model.supportsVision) sb.append("  📷");
+                if (model.isThinking()) sb.append("  🧠");
+                if (model.isVision()) sb.append("  📷");
                 if (model.supportsTools) sb.append("  🔧");
                 meta.setText(sb.toString());
                 badge.setVisibility(isDefault ? View.VISIBLE : View.GONE);

@@ -235,8 +235,13 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
             }
             imageContainer.setVisibility(View.VISIBLE);
             int size = (int) (context.getResources().getDisplayMetrics().density * 8);
+            // 点击任意一张打开全屏预览（可缩放、保存到相册），多图一次带入可左右切换的那张起始位置
+            final java.util.ArrayList<String> previewFiles = new java.util.ArrayList<>();
             for (String filename : msg.generatedImages) {
-                File file = ImageCompressor.imageFile(context, filename);
+                previewFiles.add(ImageCompressor.imageFile(context, filename).getAbsolutePath());
+            }
+            for (int i = 0; i < msg.generatedImages.size(); i++) {
+                File file = ImageCompressor.imageFile(context, msg.generatedImages.get(i));
                 Bitmap bitmap = ImageLoader.load(file, IMAGE_MAX_SIZE);
                 if (bitmap == null) continue;
                 ImageView imageView = new ImageView(context);
@@ -247,6 +252,14 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
                         LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
                 params.topMargin = size / 2;
                 imageView.setLayoutParams(params);
+                final int index = i;
+                imageView.setOnClickListener(v -> {
+                    android.content.Intent intent = new android.content.Intent(
+                            context, io.github.numai5.ImagePreviewActivity.class);
+                    intent.putStringArrayListExtra(io.github.numai5.ImagePreviewActivity.EXTRA_FILES, previewFiles);
+                    intent.putExtra(io.github.numai5.ImagePreviewActivity.EXTRA_INDEX, index);
+                    context.startActivity(intent);
+                });
                 imageContainer.addView(imageView);
             }
             if (imageContainer.getChildCount() == 0) {

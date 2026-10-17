@@ -26,6 +26,9 @@ public class ConfigManager {
     private static final String KEY_SHRINK_THINK = "shrinkThink";
     private static final String KEY_NEWAPI_DIALECT = "newapiDialect";
     private static final String KEY_TOOL_ORDER = "toolOrder";
+    /** AI 绘图页上次用的模型与尺寸 */
+    private static final String KEY_IMAGEGEN_MODEL_UID = "imagegenModelUid";
+    private static final String KEY_IMAGEGEN_SIZE = "imagegenSize";
     /** 魔搭预设是否已补入（只补一次，避免用户删除后又被加回） */
     private static final String KEY_MODELSCOPE_PRESET = "modelscopePresetAdded";
     // 旧版字段（仅用于一次性迁移）
@@ -320,5 +323,23 @@ public class ConfigManager {
 
     public void updateToolOrder(String order) {
         preferences.edit().putString(KEY_TOOL_ORDER, order == null ? "" : order).apply();
+    }
+
+    // ===== AI 绘图偏好（独立页记住上次选择） =====
+
+    public String getImageGenModelUid() {
+        return preferences.getString(KEY_IMAGEGEN_MODEL_UID, null);
+    }
+
+    public void setImageGenModelUid(String uid) {
+        preferences.edit().putString(KEY_IMAGEGEN_MODEL_UID, uid).apply();
+    }
+
+    public String getImageGenSize() {
+        return preferences.getString(KEY_IMAGEGEN_SIZE, "1024x1024");
+    }
+
+    public void setImageGenSize(String size) {
+        preferences.edit().putString(KEY_IMAGEGEN_SIZE, size).apply();
     }
 }

@@ -5,29 +5,51 @@ import android.content.SharedPreferences;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import com.google.gson.Gson;
+import com.google.gson.reflect.TypeToken;
 import io.github.numai5.ImageGenService;
-import io.github.numai5.model.Chat;
-import io.github.numai5.model.Message;
 import io.github.numai5.provider.ModelDef;
 import io.github.numai5.provider.Provider;
 
 /**
  * 生图任务协调者（进程级单例 + 任务落盘）。
  *
- * 后台执行：任务交给 ImageGenService（前台服务）执行，切走 App 也会继续；
- * 任务信息持久化到 SharedPreferences，进程被杀后服务完成时仍能凭 chatId/messageId 找回消息写入结果。
+ * 生图是独立流程，不写入聊天会话：
+ * - 提交后由 ImageGenService（前台服务）后台执行，切走 App 也会继续；
+ * - 任务信息持久化到 SharedPreferences，进程被杀后清理为中断；
+ * - 完成/失败通过 Listener 回调给界面（生图对话框内展示结果，可放大、保存到相册）。
  * 同一时间只允许一个生图任务，避免重复扣费。
  */
 public class ImageGenManager {
     private static final String PREFS = "numai5_imagegen";
     private static final String KEY_TASK_ID = "taskId";
-    private static final String KEY_CHAT_ID = "chatId";
-    private static final String KEY_MESSAGE_ID = "messageId";
     private static final String KEY_PROMPT = "prompt";
+    private static final String KEY_HISTORY = "history";
+    /** 历史记录条数上限（图片文件会一直保留在私有目录，这里只约束显示列表） */
+    private static final int HISTORY_MAX = 100;
+
+    /** 一条历史生成记录（Gson 序列化） */
+    public static class HistoryItem {
+        public String file;
+        public String prompt;
+        public String model;
+        public long ts;
+
+        public HistoryItem() {
+        }
+
+        public HistoryItem(String file, String prompt, String model, long ts) {
+            this.file = file;
+            this.prompt = prompt;
+            this.model = model;
+            this.ts = ts;
+        }
+    }
 
     /** UI 监听（Activity 注册/注销） */
     public interface Listener {
-        void onImageGenFinished(String messageId, boolean success, String detail);
+        void onImageGenFinished(String taskId, boolean success, String detail,
+                                List<String> imageFiles);
     }
 
     private static ImageGenManager instance;
@@ -37,7 +59,8 @@ public class ImageGenManager {
     private final List<Listener> listeners = new ArrayList<>();
 
     private String activeTaskId;
-    private String activeMessageId;
+    private String activeModelName = "";
+    private List<String> lastResultFiles;
 
     private ImageGenManager(Context context) {
         this.appContext = context.getApplicationContext();
@@ -68,111 +91,86 @@ public class ImageGenManager {
         return activeTaskId != null;
     }
 
-    /**
-     * 是否存在上次进程被杀留下的未完成任务记录。
-     * 生图服务与协调者同进程，进程没了服务也没了，所以这种残留一定是中断的旧任务。
-     */
+    /** 上次成功生成的文件（生图对话框重新打开时展示） */
+    public List<String> getLastResultFiles() {
+        return lastResultFiles;
+    }
+
+    /** 历史记录（新 → 旧） */
+    public synchronized List<HistoryItem> getHistory() {
+        String json = prefs.getString(KEY_HISTORY, null);
+        if (json == null || json.length() == 0) return new ArrayList<>();
+        try {
+            List<HistoryItem> list = new Gson().fromJson(json,
+                    new TypeToken<List<HistoryItem>>() {
+                    }.getType());
+            return list != null ? list : new ArrayList<HistoryItem>();
+        } catch (Exception e) {
+            return new ArrayList<>();
+        }
+    }
+
+    /** 是否存在上次进程被杀留下的未完成任务记录 */
     public boolean hasStaleTask() {
         return activeTaskId == null && prefs.getString(KEY_TASK_ID, null) != null;
     }
 
-    /** 丢弃残留的旧任务并把对应消息标记为中断，避免"生图中"状态永久卡住 */
+    /** 丢弃残留的旧任务记录，避免「生图中」状态永久卡住 */
     public void discardStaleTask() {
-        String chatId = prefs.getString(KEY_CHAT_ID, null);
-        String messageId = prefs.getString(KEY_MESSAGE_ID, null);
         prefs.edit().clear().apply();
-        if (chatId == null || messageId == null) return;
-
-        Chat chat = findChat(chatId);
-        if (chat == null) return;
-        for (Message m : chat.messages) {
-            if (messageId.equals(m.id) && (m.generatedImages == null || m.generatedImages.isEmpty())) {
-                m.content = "⚠ 生图中断（应用被系统回收）";
-                m.setAsError();
-                break;
-            }
-        }
-        ChatManager.getInstance().onMessageAdded(chat);
-    }
-
-    public String getActiveMessageId() {
-        return activeMessageId;
     }
 
     /**
-     * 提交生图任务：创建「生成中」的 assistant 消息并落盘，然后启动前台服务执行。
-     * @return 新建的消息 id（失败返回 null）
+     * 提交生图任务（不写入聊天会话），启动前台服务执行。
+     *
+     * @return 任务 id（失败返回 null）
      */
-    public String submit(Context context, Chat chat, Provider provider, ModelDef model,
+    public String submit(Context context, Provider provider, ModelDef model,
                          String prompt, String size, int n) {
-        if (chat == null || provider == null || model == null) return null;
+        if (provider == null || model == null) return null;
         if (isRunning()) return null;
-        if (hasStaleTask()) discardStaleTask(); // 清理上次进程被杀留下的旧任务
-
-        Message msg = MessageManager.createAssistantMessage(model.id, provider.displayName(), null);
-        msg.content = "🎨 正在生成图片：" + prompt;
-        chat.messages.add(msg);
-        ChatManager.getInstance().onMessageAdded(chat);
+        if (hasStaleTask()) discardStaleTask();
 
         String taskId = UUID.randomUUID().toString();
         activeTaskId = taskId;
-        activeMessageId = msg.id;
+        activeModelName = (model.displayName != null && model.displayName.length() > 0)
+                ? model.displayName : model.id;
 
         prefs.edit()
                 .putString(KEY_TASK_ID, taskId)
-                .putString(KEY_CHAT_ID, chat.id)
-                .putString(KEY_MESSAGE_ID, msg.id)
                 .putString(KEY_PROMPT, prompt)
                 .apply();
 
         ImageGenService.start(appContext, provider.id, model.uid(), prompt, size, n);
-        return msg.id;
+        return taskId;
     }
 
-    /**
-     * 服务完成回调。
-     * 无论进程是否重启过，都通过 chatId/messageId 找回消息写入结果。
-     */
+    private synchronized void appendHistory(List<String> files, String prompt, String modelName) {
+        if (files == null || files.isEmpty()) return;
+        List<HistoryItem> list = getHistory();
+        long now = System.currentTimeMillis();
+        for (String file : files) {
+            list.add(0, new HistoryItem(file, prompt, modelName, now));
+        }
+        while (list.size() > HISTORY_MAX) {
+            list.remove(list.size() - 1);
+        }
+        prefs.edit().putString(KEY_HISTORY, new Gson().toJson(list)).apply();
+    }
+
+    /** 服务完成回调：通知全部监听者（界面负责展示） */
     public void onFinished(List<String> filenames, String errorMessage) {
-        String chatId = prefs.getString(KEY_CHAT_ID, null);
-        String messageId = prefs.getString(KEY_MESSAGE_ID, null);
-        String prompt = prefs.getString(KEY_PROMPT, "");
+        String taskId = prefs.getString(KEY_TASK_ID, null);
         prefs.edit().clear().apply();
         activeTaskId = null;
-        activeMessageId = null;
-
-        if (chatId != null && messageId != null) {
-            Chat chat = findChat(chatId);
-            if (chat != null) {
-                Message target = null;
-                for (Message m : chat.messages) {
-                    if (messageId.equals(m.id)) {
-                        target = m;
-                        break;
-                    }
-                }
-                if (target != null) {
-                    if (errorMessage != null) {
-                        target.content = "⚠ 生图失败：" + errorMessage;
-                        target.setAsError();
-                    } else {
-                        target.generatedImages = filenames;
-                        target.content = "🎨 " + prompt;
-                    }
-                }
-                ChatManager.getInstance().onMessageAdded(chat);
-            }
+        lastResultFiles = (errorMessage == null && filenames != null)
+                ? new ArrayList<>(filenames) : null;
+        if (lastResultFiles != null) {
+            appendHistory(lastResultFiles, prefs.getString(KEY_PROMPT, ""), activeModelName);
         }
 
         for (Listener l : new ArrayList<>(listeners)) {
-            l.onImageGenFinished(messageId, errorMessage == null, errorMessage);
+            l.onImageGenFinished(taskId, errorMessage == null, errorMessage, filenames);
         }
-    }
-
-    private Chat findChat(String chatId) {
-        for (Chat c : ChatManager.getInstance().getChats()) {
-            if (chatId.equals(c.id)) return c;
-        }
-        return null;
     }
 }

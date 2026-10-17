@@ -2,6 +2,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
     <!-- 拍照识图：仅在 Android 6+ 设备运行时申请（A5） -->
     <uses-permission android:name="android.permission.CAMERA" />
     <!-- 备份导出走 SAF（用户自选位置），无需存储权限 -->
@@ -33,6 +35,11 @@
             android:name=".SettingsActivity"
             android:windowSoftInputMode="stateHidden" />
 
+        <!-- AI 绘图独立页（不混入聊天会话） -->
+        <activity
+            android:name=".ImageGenActivity"
+            android:label="@string/ai_image_gen" />
+
         <!-- 生图后台服务（前台服务 + 通知） -->
         <service
             android:name=".ImageGenService"
@@ -49,5 +56,9 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths" />
         </provider>
+        <activity
+            android:name=".ImagePreviewActivity"
+            android:exported="false"
+            android:theme="@style/Theme.AppCompat.NoActionBar" />
     </application>
 </manifest>

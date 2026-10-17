@@ -141,7 +141,8 @@ public class ImageGenService extends Service {
     }
 
     private Notification buildNotification(String title, String text, boolean ongoing) {
-        Intent open = new Intent(this, MainActivity.class);
+        // 点击通知直接回到生图页看结果
+        Intent open = new Intent(this, ImageGenActivity.class);
         open.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
         int flags = PendingIntent.FLAG_UPDATE_CURRENT;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
