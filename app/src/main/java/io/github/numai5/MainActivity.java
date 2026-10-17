@@ -36,6 +36,7 @@ import io.github.numai5.data.StreamSession;
 import io.github.numai5.model.Chat;
 import io.github.numai5.model.Config;
 import io.github.numai5.model.Message;
+import io.github.numai5.model.Role;
 import io.github.numai5.model.ThinkingLevel;
 import io.github.numai5.provider.ModelCatalog;
 import io.github.numai5.provider.ModelDef;
@@ -344,6 +345,57 @@ public class MainActivity extends AppCompatActivity implements StreamSession.Lis
         return provider != null ? provider.displayName() : model.providerId;
     }
 
+    /**
+     * 重试失败的一轮：清空该条 assistant 的残留内容，用同一个用户消息重新发起请求。
+     * 用户消息仍在历史中，不会重复发送；模型沿用当前选择（失败后可能已切换）。
+     */
+    private void retryFailedMessage(Message failed) {
+        if (streamSession.isGenerating()) {
+            toast(getString(R.string.generating));
+            return;
+        }
+        Chat chat = chatManager.getCurrentChat();
+        if (chat == null || failed == null) return;
+        int index = chat.messages.indexOf(failed);
+        if (index <= 0) return;
+
+        Message userMsg = null;
+        for (int i = index - 1; i >= 0; i--) {
+            if (chat.messages.get(i).getRoleEnum() == Role.USER) {
+                userMsg = chat.messages.get(i);
+                break;
+            }
+        }
+        if (userMsg == null) return;
+
+        ModelDef model = pendingModel != null ? pendingModel : defaultModel;
+        if (model == null) {
+            toast(getString(R.string.retry_need_model));
+            return;
+        }
+        Provider provider = ModelCatalog.getInstance().findProviderOfModel(model.uid());
+        if (provider == null || !provider.isValidForFetch()) {
+            toast(getString(R.string.provider_not_ready_format,
+                    provider != null ? provider.displayName() : model.providerId));
+            return;
+        }
+
+        failed.content = "";
+        failed.reasoningRaw = null;
+        failed.isError = false;
+        failed.invalidateCache();
+        failed.model = model.id;
+        failed.provider = providerName(model);
+        failed.thinkingLevel = pendingLevel.name();
+        chatManager.onMessageAdded(chat);
+        adapter.notifyItemChanged(index);
+        scrollToBottom();
+
+        toast(getString(R.string.retry_running));
+        streamSession.start(chat, userMsg, failed, model, pendingLevel);
+        startPolling();
+    }
+
     // ===== 流式刷新 =====
 
     private void startPolling() {
@@ -513,6 +565,7 @@ public class MainActivity extends AppCompatActivity implements StreamSession.Lis
             chat = chatManager.getCurrentChat();
         }
         adapter = new MessageAdapter(chat.messages);
+        adapter.setRetryListener(this::retryFailedMessage);
         messageList.setAdapter(adapter);
         updateTitle();
         updateModelButton();

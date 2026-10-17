@@ -46,6 +46,9 @@ public class ApiService {
     private static final String TAG = "ApiService";
     private static final MediaType JSON = MediaType.get("application/json; charset=utf-8");
 
+    /** 限频 / 上游 5xx 的自动重试次数上限（指数退避） */
+    private static final int MAX_TRANSIENT_RETRIES = 2;
+
     /** 本会话内已确认不支持 max 的模型 id（步骤5）：之后 MAX 直接降级 high，不再发送 max */
     private static final Set<String> maxUnsupportedModels =
             Collections.synchronizedSet(new HashSet<>());
@@ -131,6 +134,8 @@ public class ApiService {
             return;
         }
 
+        boolean retriedTransient = false;
+        int transientRetries = 0;
         try {
             // 排除本轮占位的 assistant 消息，避免把空回复发进请求历史
             List<Message> source = new ArrayList<>();
@@ -197,52 +202,75 @@ public class ApiService {
                     .readTimeout(300, TimeUnit.SECONDS)
                     .build();
 
-            activeCall = client.newCall(request);
-            try (Response response = activeCall.execute()) {
-                if (!response.isSuccessful()) {
-                    String errBody = response.body() != null ? response.body().string() : "";
-                    String errLower = errBody.toLowerCase(Locale.ROOT);
-                    if (response.code() == 400) {
-                        // A1 400 自愈：含 reasoning_content 错误则翻转开关重试一次
-                        if (!cancelled && reasoningRetries == 0 && errLower.contains("reasoning_content")) {
-                            model.keepReasoningInHistory = !model.keepReasoningInHistory;
-                            doChatCompletion(chat, currentUserMessage, model, level, assistantMsg, callback,
-                                    reasoningRetries + 1, maxRetryUsed);
-                            return;
+            while (true) {
+                if (cancelled) {
+                    handleCancelled(assistantMsg, callback);
+                    return;
+                }
+                activeCall = client.newCall(request);
+                try (Response response = activeCall.execute()) {
+                    if (!response.isSuccessful()) {
+                        String errBody = response.body() != null ? response.body().string() : "";
+                        String errLower = errBody.toLowerCase(Locale.ROOT);
+                        if (response.code() == 400) {
+                            // A1 400 自愈：含 reasoning_content 错误则翻转开关重试一次
+                            if (!cancelled && reasoningRetries == 0 && errLower.contains("reasoning_content")) {
+                                model.keepReasoningInHistory = !model.keepReasoningInHistory;
+                                doChatCompletion(chat, currentUserMessage, model, level, assistantMsg, callback,
+                                        reasoningRetries + 1, maxRetryUsed);
+                                return;
+                            }
+                            // 步骤5：中转不支持 max 时降级为 high 重试一次，并记住该模型
+                            if (!cancelled && !maxRetryUsed && "max".equals(effort)
+                                    && (errLower.contains("reasoning_effort") || errLower.contains("max"))) {
+                                maxUnsupportedModels.add(model.id);
+                                doChatCompletion(chat, currentUserMessage, model, level, assistantMsg, callback,
+                                        reasoningRetries, true);
+                                return;
+                            }
                         }
-                        // 步骤5：中转不支持 max 时降级为 high 重试一次，并记住该模型
-                        if (!cancelled && !maxRetryUsed && "max".equals(effort)
-                                && (errLower.contains("reasoning_effort") || errLower.contains("max"))) {
-                            maxUnsupportedModels.add(model.id);
-                            doChatCompletion(chat, currentUserMessage, model, level, assistantMsg, callback,
-                                    reasoningRetries, true);
-                            return;
+                        ApiError mapped = ErrorMapper.fromHttp(response.code(), errBody);
+                        // 限频 / 上游 5xx 自动退避重试；额度不足、Key 无效等不可恢复错误立即失败。
+                        // 已有输出内容时不重试，否则会重复生成。
+                        if (mapped.retryable && transientRetries < MAX_TRANSIENT_RETRIES
+                                && isEmpty(assistantMsg.content, assistantMsg.reasoningRaw)) {
+                            transientRetries++;
+                            retriedTransient = true;
+                            if (!sleepForRetry(transientRetries)) {
+                                handleCancelled(assistantMsg, callback);
+                                return;
+                            }
+                            continue;
                         }
+                        throw mapped;
                     }
-                    throw new ApiError(response.code() + " " + errBody, false, errBody);
-                }
 
-                ResponseBody bodyStream = response.body();
-                if (bodyStream == null) {
-                    throw new ApiError("Empty response body");
-                }
-
-                ChatCompletionResult result = new ChatCompletionResult(assistantMsg);
-                result.trimmed = trimmed;
-                if (maxRetryUsed) {
-                    result.notice = "中转站不支持 max 等级，已降级为 high";
-                }
-                parseStream(bodyStream.source(), assistantMsg, model, result);
-
-                if (result.interrupted) {
-                    if (isEmpty(assistantMsg.content, assistantMsg.reasoningRaw)) {
-                        throw new ApiError("生成中断：连接提前关闭");
+                    ResponseBody bodyStream = response.body();
+                    if (bodyStream == null) {
+                        throw new ApiError("Empty response body");
                     }
-                    assistantMsg.setAsError(); // B4：保留已收到部分并标记中断
+
+                    ChatCompletionResult result = new ChatCompletionResult(assistantMsg);
+                    result.trimmed = trimmed;
+                    if (maxRetryUsed) {
+                        result.notice = "中转站不支持 max 等级，已降级为 high";
+                    }
+                    if (retriedTransient) {
+                        result.notice = "网络波动，已自动重试后成功";
+                    }
+                    parseStream(bodyStream.source(), assistantMsg, model, result);
+
+                    if (result.interrupted) {
+                        if (isEmpty(assistantMsg.content, assistantMsg.reasoningRaw)) {
+                            throw new ApiError("生成中断：连接提前关闭");
+                        }
+                        assistantMsg.setAsError(); // B4：保留已收到部分并标记中断
+                    }
+                    postSuccess(callback, result);
+                    return;
+                } finally {
+                    activeCall = null;
                 }
-                postSuccess(callback, result);
-            } finally {
-                activeCall = null;
             }
 
         } catch (ApiError e) {
@@ -257,6 +285,10 @@ public class ApiService {
             } else {
                 postError(callback, e);
             }
+        } catch (java.net.SocketTimeoutException e) {
+            handleFailure(assistantMsg, callback, ErrorMapper.fromNetwork(e.getMessage(), true));
+        } catch (java.io.IOException e) {
+            handleFailure(assistantMsg, callback, ErrorMapper.fromNetwork(e.getMessage(), false));
         } catch (Exception e) {
             if (cancelled) {
                 handleCancelled(assistantMsg, callback);
@@ -268,6 +300,39 @@ public class ApiService {
             } else {
                 postError(callback, new ApiError(e.getMessage()));
             }
+        }
+    }
+
+    /**
+     * 自动重试前的等待（指数退避：2s、6s）。
+     * 返回 false 表示等待期间用户取消了请求，调用方应直接收尾。
+     */
+    private boolean sleepForRetry(int attempt) {
+        long waitMs = attempt <= 1 ? 2000L : 6000L;
+        long deadline = System.currentTimeMillis() + waitMs;
+        while (System.currentTimeMillis() < deadline) {
+            if (cancelled) return false;
+            try {
+                Thread.sleep(100);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        }
+        return !cancelled;
+    }
+
+    /** 网络层失败收尾：已有输出则保留内容并标记中断，否则抛出映射后的错误 */
+    private void handleFailure(Message assistantMsg, ApiCallback<ChatCompletionResult> callback, ApiError error) {
+        if (cancelled) {
+            handleCancelled(assistantMsg, callback);
+            return;
+        }
+        if (assistantMsg != null && !isEmpty(assistantMsg.content, assistantMsg.reasoningRaw)) {
+            assistantMsg.setAsError();
+            postSuccess(callback, new ChatCompletionResult(assistantMsg));
+        } else {
+            postError(callback, error);
         }
     }
 

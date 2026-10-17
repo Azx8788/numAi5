@@ -19,6 +19,9 @@
     <string name="default_label">默认</string>
     <string name="temp_label">临时</string>
     <string name="select_model_first">请先选择模型</string>
+    <string name="retry_hint">⚠ 生成失败 · 点此重试</string>
+    <string name="retry_running">正在重试…</string>
+    <string name="retry_need_model">请先选择模型再重试</string>
     <string name="provider_missing_for_model">未找到该模型所属的供应商，请到设置中检查</string>
     <string name="provider_not_ready_format">供应商「%1$s」未配置中转地址或 Key，请到设置中配置</string>
     <string name="generating">生成中…</string>

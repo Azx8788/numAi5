@@ -30,10 +30,20 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
     /** 气泡内图片显式最大边长（px 级采样目标） */
     private static final int IMAGE_MAX_SIZE = 720;
 
+    /** 出错消息「点此重试」回调 */
+    public interface OnRetryListener {
+        void onRetry(Message failedMessage);
+    }
+
     private List<Message> messages;
+    private OnRetryListener retryListener;
 
     public MessageAdapter(List<Message> messages) {
         this.messages = messages;
+    }
+
+    public void setRetryListener(OnRetryListener listener) {
+        this.retryListener = listener;
     }
 
     @Override
@@ -62,7 +72,7 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
         if (holder instanceof UserViewHolder) {
             ((UserViewHolder) holder).bind(msg);
         } else {
-            ((AssistantViewHolder) holder).bind(msg);
+            ((AssistantViewHolder) holder).bind(msg, retryListener);
         }
     }
 
@@ -108,7 +118,7 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
             MathSpan.installCopyFix(thinkingContent);
         }
 
-        void bind(Message msg) {
+        void bind(Message msg, final OnRetryListener retryListener) {
             Context context = itemView.getContext();
 
             // 思考过程
@@ -137,10 +147,17 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
             // 生图结果
             bindGeneratedImages(context, msg);
 
-            // 错误标记（B4 断流 / 生图失败）
+            // 错误标记（B4 断流 / 生图失败）：可点击重试
             if (msg.isError) {
-                metaText.setText("⚠ 生成中断");
+                metaText.setText(context.getString(R.string.retry_hint));
                 metaText.setVisibility(View.VISIBLE);
+                boolean canRetry = retryListener != null
+                        && (msg.generatedImages == null || msg.generatedImages.isEmpty());
+                if (canRetry) {
+                    metaText.setOnClickListener(v -> retryListener.onRetry(msg));
+                } else {
+                    metaText.setOnClickListener(null);
+                }
             } else {
                 StringBuilder meta = new StringBuilder();
                 if (msg.provider != null) {
@@ -151,6 +168,7 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
                     meta.append(" · ").append(ThinkingLevel.fromName(msg.thinkingLevel).getDisplay());
                 }
                 metaText.setText(meta.toString());
+                metaText.setOnClickListener(null);
             }
         }
 
