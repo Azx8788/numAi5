@@ -2,13 +2,16 @@ package io.github.numai5.ui;
 
 import android.content.Context;
 import android.graphics.Bitmap;
+import android.graphics.drawable.Drawable;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.HorizontalScrollView;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 import androidx.annotation.NonNull;
+import androidx.core.content.ContextCompat;
 import androidx.recyclerview.widget.RecyclerView;
 import java.io.File;
 import java.util.List;
@@ -100,7 +103,7 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
         View thinkingContainer;
         TextView thinkingLabel;
         TextView thinkingContent;
-        TextView contentText;
+        LinearLayout contentContainer;
         TextView metaText;
         LinearLayout imageContainer;
         boolean thinkingCollapsed = false;
@@ -110,11 +113,10 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
             thinkingContainer = v.findViewById(R.id.thinkingContainer);
             thinkingLabel = v.findViewById(R.id.thinkingLabel);
             thinkingContent = v.findViewById(R.id.thinkingContent);
-            contentText = v.findViewById(R.id.contentText);
+            contentContainer = v.findViewById(R.id.contentContainer);
             metaText = v.findViewById(R.id.metaText);
             imageContainer = v.findViewById(R.id.imageContainer);
-            // 公式以图片渲染，复制时把占位符还原为 LaTeX 原文
-            MathSpan.installCopyFix(contentText);
+            // 公式以图片渲染，复制时把占位符还原为 LaTeX 原文（每个文本块单独挂）
             MathSpan.installCopyFix(thinkingContent);
         }
 
@@ -138,11 +140,10 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
                 thinkingContainer.setVisibility(View.GONE);
             }
 
-            // 正文
+            // 正文：分段渲染，超宽公式单独成块（可横向滑动）
             String display = msg.getDisplayRaw();
             if (display == null || display.length() == 0) display = msg.content == null ? "" : msg.content;
-            contentText.setText(MarkdownParser.parse(context, display, false,
-                    contentText.getCurrentTextColor(), contentText.getTextSize()));
+            bindContent(context, display);
 
             // 生图结果
             bindGeneratedImages(context, msg);
@@ -169,6 +170,60 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
                 }
                 metaText.setText(meta.toString());
                 metaText.setOnClickListener(null);
+            }
+        }
+
+        /**
+         * 渲染正文。普通文本用 TextView，超宽公式单独放在 HorizontalScrollView 里按原始尺寸显示，
+         * 避免长公式被等比压缩到屏宽后「又小又长」且超出部分看不到。
+         */
+        private void bindContent(Context context, String display) {
+            contentContainer.removeAllViews();
+            float textSize = contentContainer.getResources().getDisplayMetrics().scaledDensity * 15f;
+            int color = ContextCompat.getColor(context, R.color.text_assistant);
+
+            List<MarkdownParser.DisplayBlock> blocks =
+                    MarkdownParser.parseBlocks(context, display, color, textSize);
+            if (blocks.isEmpty()) return;
+
+            int gap = Math.round(4 * context.getResources().getDisplayMetrics().density);
+            for (MarkdownParser.DisplayBlock block : blocks) {
+                if (block.type == MarkdownParser.DisplayBlock.TYPE_TEXT) {
+                    TextView tv = new TextView(context);
+                    tv.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 15f);
+                    tv.setTextColor(color);
+                    tv.setTextIsSelectable(true);
+                    tv.setText(block.text);
+                    MathSpan.installCopyFix(tv);
+                    contentContainer.addView(tv);
+                } else {
+                    Drawable drawable = MathRenderer.render(context, block.latex, block.display,
+                            textSize, 0, color);
+                    if (drawable == null) {
+                        TextView tv = new TextView(context);
+                        tv.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 15f);
+                        tv.setTextColor(color);
+                        tv.setTextIsSelectable(true);
+                        tv.setText(block.raw);
+                        contentContainer.addView(tv);
+                    } else {
+                        ImageView image = new ImageView(context);
+                        image.setImageDrawable(drawable);
+                        image.setAdjustViewBounds(true);
+                        image.setScaleType(ImageView.ScaleType.FIT_START);
+                        image.setPadding(0, gap, 0, gap);
+
+                        HorizontalScrollView scroll = new HorizontalScrollView(context);
+                        scroll.setHorizontalScrollBarEnabled(true);
+                        scroll.setOverScrollMode(View.OVER_SCROLL_IF_CONTENT_SCROLLS);
+                        scroll.addView(image, new LinearLayout.LayoutParams(
+                                LinearLayout.LayoutParams.WRAP_CONTENT,
+                                LinearLayout.LayoutParams.WRAP_CONTENT));
+                        contentContainer.addView(scroll, new LinearLayout.LayoutParams(
+                                LinearLayout.LayoutParams.MATCH_PARENT,
+                                LinearLayout.LayoutParams.WRAP_CONTENT));
+                    }
+                }
             }
         }
 

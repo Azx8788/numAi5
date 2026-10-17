@@ -34,15 +34,14 @@
             android:textSize="13sp" />
     </LinearLayout>
 
-    <TextView
-        android:id="@+id/contentText"
+    <!-- 正文容器：普通文本与超宽公式交替排布，超宽公式单独放在可横向滑动的容器里 -->
+    <LinearLayout
+        android:id="@+id/contentContainer"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:background="@color/bg_assistant_bubble"
-        android:padding="12dp"
-        android:textColor="@color/text_assistant"
-        android:textIsSelectable="true"
-        android:textSize="15sp" />
+        android:orientation="vertical"
+        android:padding="12dp" />
 
     <!-- 生图结果（图片在提示词下方） -->
     <LinearLayout

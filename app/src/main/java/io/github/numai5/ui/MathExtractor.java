@@ -37,11 +37,17 @@ public final class MathExtractor {
         public final String raw;
         /** true = $$ / \[ \]（块级显示）；false = $ / \( \)（行内） */
         public final boolean display;
+        /** 在原文本中的起点（含定界符） */
+        public final int start;
+        /** 在原文本中的终点（不含，紧接闭合定界符之后） */
+        public final int end;
 
-        Segment(String latex, String raw, boolean display) {
+        Segment(String latex, String raw, boolean display, int start, int end) {
             this.latex = latex;
             this.raw = raw;
             this.display = display;
+            this.start = start;
+            this.end = end;
         }
     }
 
@@ -124,7 +130,7 @@ public final class MathExtractor {
                     if (close > i + 1) {
                         String latex = source.substring(i + 2, close).trim();
                         if (isRenderable(latex)) {
-                            addSegment(out, segments, latex, source.substring(i, close + 2), delim == '[');
+                            addSegment(out, segments, latex, source.substring(i, close + 2), delim == '[', i, close + 2);
                             i = close + 2;
                             continue;
                         }
@@ -165,7 +171,7 @@ public final class MathExtractor {
             if (close > start + 1) {
                 String latex = s.substring(start + 2, close).trim();
                 if (isRenderable(latex)) {
-                    addSegment(out, segments, latex, s.substring(start, close + 2), true);
+                    addSegment(out, segments, latex, s.substring(start, close + 2), true, start, close + 2);
                     return close + 2;
                 }
             }
@@ -175,7 +181,7 @@ public final class MathExtractor {
         if (close > 0) {
             String latex = s.substring(start + 1, close).trim();
             if (isRenderable(latex)) {
-                addSegment(out, segments, latex, s.substring(start, close + 1), false);
+                addSegment(out, segments, latex, s.substring(start, close + 1), false, start, close + 1);
                 return close + 1;
             }
         }
@@ -208,13 +214,13 @@ public final class MathExtractor {
     }
 
     private static void addSegment(StringBuilder out, List<Segment> segments,
-                                   String latex, String raw, boolean display) {
+                                   String latex, String raw, boolean display, int start, int end) {
         if (segments.size() >= MAX_SEGMENTS) {
             out.append(raw);
             return;
         }
         out.append(placeholder(segments.size()));
-        segments.add(new Segment(latex, raw, display));
+        segments.add(new Segment(latex, raw, display, start, end));
     }
 
     private static boolean isRenderable(String latex) {

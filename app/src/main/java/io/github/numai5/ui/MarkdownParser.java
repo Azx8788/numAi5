@@ -79,6 +79,110 @@ public class MarkdownParser {
         return parse(context, text, isGenerating, color, textSizePx);
     }
 
+    /** 公式超出可用宽度时需要单独成块、可横向滑动 */
+    public static final class DisplayBlock {
+        public static final int TYPE_TEXT = 0;
+        public static final int TYPE_MATH = 1;
+
+        public final int type;
+        /** TYPE_TEXT：已解析好的富文本 */
+        public final CharSequence text;
+        /** TYPE_MATH：公式内容 */
+        public final String latex;
+        /** TYPE_MATH：原始文本（渲染失败时回退显示） */
+        public final String raw;
+        /** TYPE_MATH：是否块级公式 */
+        public final boolean display;
+
+        private DisplayBlock(int type, CharSequence text, String latex, String raw, boolean display) {
+            this.type = type;
+            this.text = text;
+            this.latex = latex;
+            this.raw = raw;
+            this.display = display;
+        }
+
+        static DisplayBlock text(CharSequence text) {
+            return new DisplayBlock(TYPE_TEXT, text, null, null, false);
+        }
+
+        static DisplayBlock math(MathExtractor.Segment segment) {
+            return new DisplayBlock(TYPE_MATH, null, segment.latex, segment.raw, segment.display);
+        }
+    }
+
+    /** 多宽的公式算「超宽」：可用宽度的 92% */
+    private static final float WIDE_MATH_RATIO = 0.92f;
+
+    /**
+     * 把正文拆成「文本片段 + 超宽公式」的交替序列。
+     *
+     * 为什么：行内公式一旦长到超过屏幕宽度，等比压缩到屏宽会变得又小又扁，
+     * 而且 TextView 里的图片无法横向滚动，超出部分直接看不见。
+     * 因此超宽公式单独拆出来，由调用方用 HorizontalScrollView 按原始尺寸展示。
+     *
+     * 未超宽的公式仍走普通内联渲染（与 parse 行为一致）。
+     */
+    public static List<DisplayBlock> parseBlocks(Context context, String text, int color, float textSizePx) {
+        List<DisplayBlock> blocks = new ArrayList<>();
+        if (text == null || text.length() == 0) return blocks;
+
+        MathExtractor.Result math = MathExtractor.extract(text);
+        if (!math.hasMath()) {
+            blocks.add(DisplayBlock.text(parse(context, text, false, color, textSizePx)));
+            return blocks;
+        }
+
+        int available = availableWidth(context);
+        List<MathExtractor.Segment> wide = new ArrayList<>();
+        for (MathExtractor.Segment segment : math.segments) {
+            // maxWidthPx 传 0：按原始尺寸渲染，仅用于测量
+            Drawable drawable = MathRenderer.render(context, segment.latex, segment.display,
+                    textSizePx, 0, color);
+            if (drawable == null) continue;
+            int width = drawable.getBounds().width();
+            if (width > 0 && width > available * WIDE_MATH_RATIO) {
+                wide.add(segment);
+            }
+        }
+
+        if (wide.isEmpty()) {
+            blocks.add(DisplayBlock.text(parse(context, text, false, color, textSizePx)));
+            return blocks;
+        }
+
+        // 按超宽公式的位置把原文切开：文本段单独走 Markdown 解析，公式段独立成块
+        int cursor = 0;
+        for (MathExtractor.Segment segment : wide) {
+            if (segment.start > cursor) {
+                String piece = text.substring(cursor, segment.start);
+                if (piece.trim().length() > 0) {
+                    blocks.add(DisplayBlock.text(parse(context, piece, false, color, textSizePx)));
+                }
+            }
+            blocks.add(DisplayBlock.math(segment));
+            cursor = segment.end;
+        }
+        if (cursor < text.length()) {
+            String piece = text.substring(cursor);
+            if (piece.trim().length() > 0) {
+                blocks.add(DisplayBlock.text(parse(context, piece, false, color, textSizePx)));
+            }
+        }
+        if (blocks.isEmpty()) {
+            blocks.add(DisplayBlock.text(parse(context, text, false, color, textSizePx)));
+        }
+        return blocks;
+    }
+
+    /** 公式可用宽度（减去气泡与列表内边距） */
+    private static int availableWidth(Context context) {
+        int screen = context.getResources().getDisplayMetrics().widthPixels;
+        int padding = (int) (100 * context.getResources().getDisplayMetrics().density);
+        int width = screen - padding;
+        return width < 160 ? 160 : width;
+    }
+
     /**
      * @param color      公式渲染颜色（跟随所在 TextView 的文字颜色）
      * @param textSizePx 所在 TextView 的字号（px），公式按此大小渲染
@@ -288,9 +392,7 @@ public class MarkdownParser {
         }
         if (found.isEmpty()) return;
 
-        int maxWidth = context.getResources().getDisplayMetrics().widthPixels
-                - (int) (100 * context.getResources().getDisplayMetrics().density);
-        if (maxWidth < 120) maxWidth = 120;
+        int maxWidth = availableWidth(context);
 
         for (int k = found.size() - 1; k >= 0; k--) {
             int[] pos = found.get(k);
