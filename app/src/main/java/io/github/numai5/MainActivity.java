@@ -5,7 +5,6 @@ import android.content.pm.PackageManager;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
-import android.view.DragEvent;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
@@ -68,6 +67,7 @@ public class MainActivity extends AppCompatActivity implements StreamSession.Lis
     private ImageButton btnImage;
     private TextView btnRemoveImage;
     private LinearLayout toolBar;
+    private io.github.numai5.ui.FloatingToolHost floatingHost;
 
     private ChatManager chatManager;
     private ConfigManager configManager;
@@ -118,9 +118,23 @@ public class MainActivity extends AppCompatActivity implements StreamSession.Lis
         bindListeners();
         loadCurrentChat();
 
-        // 按钮顺序（长按拖动排序，持久化）在绑定监听后应用
-        applyToolOrder(configManager.getToolOrder());
-        enableToolDrag();
+        // 工具按钮自由摆放：长按拖到屏幕任意位置（位置持久化，拖回工具栏恢复原位）
+        floatingHost = new io.github.numai5.ui.FloatingToolHost(this, toolBar,
+                new io.github.numai5.ui.FloatingToolHost.Store() {
+                    @Override
+                    public String load() {
+                        return configManager.getToolPlacement();
+                    }
+
+                    @Override
+                    public void save(String state) {
+                        configManager.updateToolPlacement(state);
+                    }
+                });
+        floatingHost.register("btnImage", btnImage);
+        floatingHost.register("btnThinking", btnThinking);
+        floatingHost.register("btnModel", btnModel);
+        floatingHost.attach();
 
         // 旋转等重建后请求仍在进行：恢复轮询（进程被杀后 StreamSession 随进程消失，不会误恢复）
         if (streamSession.isGenerating() && streamSession.getActiveMsg() != null) {
@@ -132,98 +146,6 @@ public class MainActivity extends AppCompatActivity implements StreamSession.Lis
         ImageGenManager imageGenManager = ImageGenManager.getInstance(this);
         if (imageGenManager.hasStaleTask() && !imageGenManager.isRunning()) {
             imageGenManager.discardStaleTask();
-        }
-    }
-
-    // ===== 输入栏按钮拖动排序 =====
-
-    private String toolName(View v) {
-        int id = v.getId();
-        if (id == R.id.btnImage) return "btnImage";
-        if (id == R.id.btnThinking) return "btnThinking";
-        if (id == R.id.btnModel) return "btnModel";
-        return null;
-    }
-
-    private View toolView(String name) {
-        if ("btnImage".equals(name)) return btnImage;
-        if ("btnThinking".equals(name)) return btnThinking;
-        if ("btnModel".equals(name)) return btnModel;
-        return null;
-    }
-
-    /** 按已保存顺序重排按钮（保留各自的布局参数，如模型按钮的伸展权重） */
-    private void applyToolOrder(String order) {
-        if (order == null || order.length() == 0) return;
-        java.util.Map<String, ViewGroup.LayoutParams> params = new java.util.HashMap<>();
-        java.util.Map<String, View> views = new java.util.HashMap<>();
-        for (String name : new String[]{"btnImage", "btnThinking", "btnModel"}) {
-            View v = toolView(name);
-            if (v != null) {
-                views.put(name, v);
-                params.put(name, v.getLayoutParams());
-            }
-        }
-        toolBar.removeAllViews();
-        for (String name : order.split(",")) {
-            String key = name.trim();
-            View v = views.remove(key);
-            if (v != null) toolBar.addView(v, params.get(key));
-        }
-        // 兜底：未出现在保存顺序里的按钮追加到末尾
-        for (String name : new String[]{"btnImage", "btnThinking", "btnModel"}) {
-            View v = views.remove(name);
-            if (v != null) toolBar.addView(v, params.get(name));
-        }
-    }
-
-    private void saveToolOrder() {
-        StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < toolBar.getChildCount(); i++) {
-            String name = toolName(toolBar.getChildAt(i));
-            if (name == null) continue;
-            if (sb.length() > 0) sb.append(',');
-            sb.append(name);
-        }
-        configManager.updateToolOrder(sb.toString());
-    }
-
-    /** 长按任意工具按钮开始拖动，松手到另一个按钮上即交换位置 */
-    private void enableToolDrag() {
-        for (int i = 0; i < toolBar.getChildCount(); i++) {
-            View child = toolBar.getChildAt(i);
-            child.setOnLongClickListener(v -> {
-                v.startDragAndDrop(null, new View.DragShadowBuilder(v), v, 0);
-                toast(getString(R.string.tool_drag_hint));
-                return true;
-            });
-            child.setOnDragListener((v, event) -> {
-                if (event.getAction() == DragEvent.ACTION_DROP) {
-                    View dragged = (View) event.getLocalState();
-                    if (dragged != null && dragged != v) {
-                        swapToolViews(dragged, v);
-                        saveToolOrder();
-                    }
-                }
-                return true;
-            });
-        }
-    }
-
-    private void swapToolViews(View a, View b) {
-        int ia = toolBar.indexOfChild(a);
-        int ib = toolBar.indexOfChild(b);
-        if (ia < 0 || ib < 0 || ia == ib) return;
-        ViewGroup.LayoutParams pa = a.getLayoutParams();
-        ViewGroup.LayoutParams pb = b.getLayoutParams();
-        toolBar.removeView(a);
-        toolBar.removeView(b);
-        if (ia < ib) {
-            toolBar.addView(b, ia, pb);
-            toolBar.addView(a, ib, pa);
-        } else {
-            toolBar.addView(a, ib, pa);
-            toolBar.addView(b, ia, pb);
         }
     }
 

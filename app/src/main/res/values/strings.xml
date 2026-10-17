@@ -79,7 +79,7 @@
     <string name="no_models_hint">暂无模型，请先在设置中添加供应商并拉取模型</string>
 
     <!-- 按钮排序 -->
-    <string name="tool_drag_hint">长按并拖到另一个按钮上即可换位</string>
+    <string name="tool_drag_hint">已进入摆放模式：拖到屏幕任意位置松手即可；拖回输入栏恢复原位</string>
 
     <!-- AI 绘图（生图） -->
     <string name="ai_image_gen">AI 绘图</string>

@@ -27,6 +27,7 @@ public class ConfigManager {
     private static final String KEY_NEWAPI_DIALECT = "newapiDialect";
     private static final String KEY_TOOL_ORDER = "toolOrder";
     /** AI 绘图页上次用的模型与尺寸 */
+    private static final String KEY_TOOL_PLACEMENT = "toolPlacement";
     private static final String KEY_IMAGEGEN_MODEL_UID = "imagegenModelUid";
     private static final String KEY_IMAGEGEN_SIZE = "imagegenSize";
     /** 魔搭预设是否已补入（只补一次，避免用户删除后又被加回） */
@@ -323,6 +324,17 @@ public class ConfigManager {
 
     public void updateToolOrder(String order) {
         preferences.edit().putString(KEY_TOOL_ORDER, order == null ? "" : order).apply();
+    }
+
+    // ===== 工具按钮自由摆放（FloatingToolHost 持久化） =====
+
+    /** @return "name:xRatio,yRatio;..." 或空串 */
+    public String getToolPlacement() {
+        return preferences.getString(KEY_TOOL_PLACEMENT, "");
+    }
+
+    public void updateToolPlacement(String state) {
+        preferences.edit().putString(KEY_TOOL_PLACEMENT, state == null ? "" : state).apply();
     }
 
     // ===== AI 绘图偏好（独立页记住上次选择） =====
