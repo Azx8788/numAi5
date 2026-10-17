@@ -37,7 +37,8 @@ public class ApiClient {
 
         String apiKey = apiRequest.getApiKey();
         if (apiKey != null && apiKey.length() > 0) {
-            builder.header("Authorization", "Bearer " + apiKey);
+            // 清洗：用户可能把说明文字/换行/引号一起粘进 Key，OkHttp 会直接抛异常
+            builder.header("Authorization", "Bearer " + ApiAuth.sanitize(apiKey));
         }
         for (Map.Entry<String, String> entry : apiRequest.getHeaders().entrySet()) {
             builder.header(entry.getKey(), entry.getValue());

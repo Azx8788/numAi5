@@ -27,9 +27,11 @@ import io.github.numai5.model.Message;
 import io.github.numai5.model.Role;
 import io.github.numai5.model.ThinkingLevel;
 import io.github.numai5.provider.ModelCatalog;
-import io.github.numai5.provider.ModelscopePresets;
 import io.github.numai5.provider.ModelDef;
 import io.github.numai5.provider.Provider;
+import io.github.numai5.api.protocol.ChunkDelta;
+import io.github.numai5.api.protocol.Protocols;
+import io.github.numai5.api.protocol.ProviderProtocol;
 import io.github.numai5.thinking.ThinkingMapper;
 import okhttp3.Call;
 import okhttp3.MediaType;
@@ -126,8 +128,7 @@ public class ApiService {
             postError(callback, new ApiError("供应商「" + provider.displayName() + "」未配置中转地址或 Key"));
             return;
         }
-        String baseUrl = provider.normalizedBaseUrl();
-        String apiKey = provider.apiKey;
+        ProviderProtocol protocol = Protocols.of(provider, apiClient); // 发送/接收协议差异都从这里走
         String modelId = model.requestId(); // 步骤8：优先使用 /models 返回的原始 id
 
         if (cancelled) {
@@ -163,7 +164,7 @@ public class ApiService {
 
             // 思考等级（步骤5）：方言开关从配置读取（默认 NewAPI 方言）
             String effort = null;
-            if (model.supportsThinking) {
+            if (model.isThinking()) {
                 effort = ThinkingMapper.apply(level, config.newapiDialect ? "newapi" : "standard");
                 if (effort != null) {
                     if ("max".equals(effort) && maxUnsupportedModels.contains(model.id)) {
@@ -190,12 +191,9 @@ public class ApiService {
                 }
             }
 
-            Request.Builder requestBuilder = new Request.Builder()
-                    .url(baseUrl + "/chat/completions")
-                    .header("Authorization", "Bearer " + apiKey)
-                    .header("Content-Type", "application/json");
-            // 已知会对客户端做指纹校验的站点（如 agentrouter.org），自动补上兼容头
-            ApiCompatHeaders.apply(requestBuilder, baseUrl + "/chat/completions");
+            String chatUrl = protocol.chatUrl(provider);
+            Request.Builder requestBuilder = new Request.Builder().url(chatUrl);
+            protocol.applyHeaders(requestBuilder, provider, chatUrl);
             Request request = requestBuilder
                     .post(RequestBody.create(payload.toString(), JSON))
                     .build();
@@ -259,7 +257,7 @@ public class ApiService {
                     if (retriedTransient) {
                         result.notice = "网络波动，已自动重试后成功";
                     }
-                    parseStream(bodyStream.source(), assistantMsg, model, result);
+                    parseStream(bodyStream.source(), assistantMsg, model, result, protocol);
 
                     if (result.interrupted) {
                         if (isEmpty(assistantMsg.content, assistantMsg.reasoningRaw)) {
@@ -518,21 +516,10 @@ public class ApiService {
     }
 
     /** 提取流式 chunk 中的 error 对象信息（步骤4） */
-    private String extractChunkError(JsonObject chunk) {
-        JsonElement err = chunk.get("error");
-        if (err.isJsonObject() && err.getAsJsonObject().has("message")
-                && !err.getAsJsonObject().get("message").isJsonNull()) {
-            return err.getAsJsonObject().get("message").getAsString();
-        }
-        if (err.isJsonPrimitive()) {
-            return err.getAsString();
-        }
-        return err.toString();
-    }
-
     /** SSE 流式解析（步骤4：处理 [DONE] / finish_reason / 流中 error 对象，标记截断与中断） */
     private void parseStream(okio.BufferedSource source, Message assistantMsg, ModelDef model,
-                             ChatCompletionResult result) throws ApiError, IOException {
+                             ChatCompletionResult result, ProviderProtocol protocol)
+            throws ApiError, IOException {
         String line;
         boolean receivedDone = false;
         String lastFinishReason = null;
@@ -557,55 +544,24 @@ public class ApiService {
                 continue;
             }
 
-            // 流中错误对象（步骤4）：{"error":{"message":...}}
-            if (chunk.has("error") && !chunk.get("error").isJsonNull()) {
-                throw new ApiError(extractChunkError(chunk), false, chunk.toString());
+            // 流中错误对象（步骤4）：OpenAI 的 error / 魔搭的 errors，解码交给协议
+            if ((chunk.has("error") && !chunk.get("error").isJsonNull())
+                    || (chunk.has("errors") && !chunk.get("errors").isJsonNull())) {
+                throw new ApiError(protocol.decodeChunkError(chunk), false, chunk.toString());
             }
 
-            if (!chunk.has("choices")) continue;
-            JsonArray choices = chunk.getAsJsonArray("choices");
-            if (choices == null || choices.size() == 0) continue;
-
             try {
-                JsonObject choice = choices.get(0).getAsJsonObject();
+                ChunkDelta delta = protocol.decodeChunk(chunk);
+                if (delta.finishReason != null) lastFinishReason = delta.finishReason;
+                if (delta.reasoning != null) assistantMsg.appendReasoning(delta.reasoning);
+                if (delta.content != null) assistantMsg.appendContent(delta.content);
 
-                JsonElement finishReason = choice.get("finish_reason");
-                if (finishReason != null && !finishReason.isJsonNull()) {
-                    lastFinishReason = finishReason.getAsString();
-                }
-
-                JsonElement deltaEl = choice.get("delta");
-                if (deltaEl == null || deltaEl.isJsonNull() || !deltaEl.isJsonObject()) {
-                    continue;
-                }
-                JsonObject delta = deltaEl.getAsJsonObject();
-
-                if (delta.has("reasoning_content") && !delta.get("reasoning_content").isJsonNull()) {
-                    assistantMsg.appendReasoning(delta.get("reasoning_content").getAsString());
-                }
-                if (delta.has("content") && !delta.get("content").isJsonNull()) {
-                    assistantMsg.appendContent(delta.get("content").getAsString());
-                }
-
-                // 工具调用流式聚合
-                if (delta.has("tool_calls") && !delta.get("tool_calls").isJsonNull()) {
-                    JsonArray tcArr = delta.getAsJsonArray("tool_calls");
-                    for (int i = 0; i < tcArr.size(); i++) {
-                        JsonObject tcObj = tcArr.get(i).getAsJsonObject();
-                        String id = tcObj.has("id") && !tcObj.get("id").isJsonNull() ? tcObj.get("id").getAsString() : null;
-                        int index = tcObj.has("index") ? tcObj.get("index").getAsInt() : 0;
-                        Message.StreamToolCall stc = findOrCreateToolCall(assistantMsg, id, index);
-                        if (id != null) stc.id = id;
-                        if (tcObj.has("function")) {
-                            JsonObject fn = tcObj.getAsJsonObject("function");
-                            if (fn.has("name") && !fn.get("name").isJsonNull()) {
-                                stc.name = fn.get("name").getAsString();
-                            }
-                            if (fn.has("arguments") && !fn.get("arguments").isJsonNull()) {
-                                stc.arguments.append(fn.get("arguments").getAsString());
-                            }
-                        }
-                    }
+                // 工具调用流式聚合（增量交给协议解码，聚合逻辑不变）
+                for (ChunkDelta.ToolCallDelta tcd : delta.toolCalls) {
+                    Message.StreamToolCall stc = findOrCreateToolCall(assistantMsg, tcd.id, tcd.index);
+                    if (tcd.id != null) stc.id = tcd.id;
+                    if (tcd.name != null) stc.name = tcd.name;
+                    if (tcd.arguments != null) stc.arguments.append(tcd.arguments);
                 }
             } catch (Exception e) {
                 Log.e(TAG, "parse stream chunk", e);
@@ -657,83 +613,22 @@ public class ApiService {
         return stc;
     }
 
-    /** 拉取指定供应商的模型列表（只解析、不落库，由调用方决定添加哪些） */
+    /** 拉取指定供应商的模型列表（协议差异交给适配器；只解析、不落库） */
     public void getModels(Provider provider, ApiCallback<List<ModelDef>> callback) {
         if (provider == null) {
             postError(callback, new ApiError("未指定供应商"));
             return;
         }
-        final String url = provider.normalizedBaseUrl() + "/models";
         new Thread(() -> {
             try {
-                ApiRequest request = new ApiRequest("/models", "GET")
-                        .setCredentials(provider.normalizedBaseUrl(), provider.apiKey);
-                ApiResponse response = apiClient.execute(request);
-                if (!response.successful) {
-                    postError(callback, new ApiError(response.errorBody));
-                    return;
-                }
-
-                // 宽松解析：部分站点返回的 JSON 并不规范（未加引号的键等），严格模式会直接抛
-                // "Use JsonReader.setLenient(true)..."；真的不是 JSON（如 HTML 错误页）时给出可定位提示
-                JsonElement root;
-                try {
-                    root = JsonUtil.parseLenient(response.body);
-                } catch (Exception parseFailure) {
-                    postError(callback, new ApiError(
-                            describeBadModelsResponse(url, response, "返回内容不是有效的 JSON")));
-                    return;
-                }
-                if (root == null || !root.isJsonObject()) {
-                    postError(callback, new ApiError(
-                            describeBadModelsResponse(url, response, "响应不是 JSON 对象")));
-                    return;
-                }
-                JsonArray data = root.getAsJsonObject().getAsJsonArray("data");
-                if (data == null) {
-                    postError(callback, new ApiError(describeBadModelsResponse(url, response,
-                            "响应里没有 data 数组（该站可能不支持 /models）")));
-                    return;
-                }
-                List<ModelDef> models = ModelCatalog.getInstance().parseModelsEndpoint(data, provider.id);
-                if (provider.isModelScope()) {
-                    // 魔搭 /v1/models 只返回对话模型，生图模型不在其中，这里补进候选列表
-                    for (ModelDef image : ModelscopePresets.imageModels(provider.id)) {
-                        boolean exists = false;
-                        for (ModelDef m : models) {
-                            if (image.id != null && image.id.equals(m.id)) {
-                                exists = true;
-                                break;
-                            }
-                        }
-                        if (!exists) models.add(image);
-                    }
-                }
-                postSuccess(callback, models);
+                ProviderProtocol protocol = Protocols.of(provider, apiClient);
+                postSuccess(callback, protocol.fetchModels(provider));
             } catch (ApiError e) {
                 postError(callback, e);
             } catch (Exception e) {
                 postError(callback, new ApiError(e.getMessage()));
             }
         }).start();
-    }
-
-    /** 拉取模型失败时拼装可读原因：请求地址 + HTTP 状态 + 实际返回片段（疑似非 JSON 时附检查建议） */
-    private String describeBadModelsResponse(String url, ApiResponse response, String reason) {
-        StringBuilder sb = new StringBuilder(reason);
-        sb.append("；请求 ").append(url)
-                .append(" 返回（HTTP ").append(response.statusCode).append("）：")
-                .append(JsonUtil.snippet(response.body));
-        if (!JsonUtil.looksLikeJson(response.body)) {
-            sb.append("。请检查中转地址是否以 /v1 结尾、该站是否提供 /models 接口");
-        }
-        return sb.toString();
-    }
-
-    private String trimSlash(String url) {
-        if (url == null) return "";
-        while (url.endsWith("/")) url = url.substring(0, url.length() - 1);
-        return url;
     }
 
     private <T> void postSuccess(final ApiCallback<T> callback, final T result) {
