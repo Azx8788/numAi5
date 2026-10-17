@@ -34,6 +34,7 @@ import io.github.numai5.provider.ModelCatalog;
 import io.github.numai5.provider.ModelDef;
 import io.github.numai5.provider.Provider;
 import io.github.numai5.ui.ModelPickerDialog;
+import io.github.numai5.ui.ModelTagPickerDialog;
 import io.github.numai5.ui.ModelSelectorSheet;
 
 /**
@@ -95,43 +96,26 @@ public class SettingsActivity extends AppCompatActivity {
         btnSave.setOnClickListener(v -> save());
         btnExportBackup.setOnClickListener(v -> startExport());
         btnImportBackup.setOnClickListener(v -> startImport());
-        btnImageGenTag.setOnClickListener(v -> showImageGenTagDialog());
+        btnImageGenTag.setOnClickListener(v -> showModelTagDialog());
     }
 
     // ===== 绘图模型标记 =====
 
-    /**
-     * 手动标记哪些模型是绘图模型。
-     * 自动识别（按名字猜）只作默认值，这里勾选的结果优先级更高——中转站的模型名不一定规范，
-     * 漏判时可以手动勾上，误判时可以手动取消。跨供应商，对话框内显示归属并提供搜索。
-     */
-    private void showImageGenTagDialog() {
+    /** 手动标注每个模型的能力（思考/识图/绘图），手动勾选永远优先于自动推断 */
+    private void showModelTagDialog() {
         final List<ModelDef> models = ModelCatalog.getInstance().getAllModels();
         if (models.isEmpty()) {
             Toast.makeText(this, R.string.no_models_hint, Toast.LENGTH_SHORT).show();
             return;
         }
-
-        List<String> preselected = new ArrayList<>();
-        for (ModelDef m : models) {
-            if (m.isImageGen()) preselected.add(m.uid());
-        }
-
-        ModelPickerDialog.show(this, getString(R.string.imagegen_tag_button),
-                models, preselected, new ModelPickerDialog.OnPickListener() {
-                    @Override
-                    public void onPick(List<ModelDef> selected) {
-                        Set<String> selectedUids = new HashSet<>();
-                        for (ModelDef m : selected) selectedUids.add(m.uid());
-                        for (ModelDef m : models) {
-                            m.setImageGenTag(selectedUids.contains(m.uid()));
-                        }
-                        configManager.refresh(); // 一次性保存
-                        Toast.makeText(SettingsActivity.this,
-                                getString(R.string.imagegen_tag_saved, selected.size()),
-                                Toast.LENGTH_SHORT).show();
-                    }
-                });
+        ModelTagPickerDialog.show(this, models, new ModelTagPickerDialog.OnSaveListener() {
+            @Override
+            public void onSave() {
+                configManager.refresh(); // 标注已实时写入 ModelDef，这里一次性持久化
+                Toast.makeText(SettingsActivity.this,
+                        R.string.model_tag_saved, Toast.LENGTH_SHORT).show();
+            }
+        });
     }
 
     // ===== 备份与恢复 =====

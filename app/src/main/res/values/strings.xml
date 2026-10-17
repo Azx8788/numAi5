@@ -27,6 +27,7 @@
     <string name="generating">生成中…</string>
     <string name="interrupted">生成中断</string>
     <string name="truncated">因长度截断</string>
+    <string name="imagegen_model_not_chat">这是绘图模型，不能用于对话。请选择文本模型，或到「AI 绘图」页使用它生成图片</string>
     <string name="no_vision">当前模型不支持视觉</string>
     <string name="about">关于</string>
     <string name="about_last_crash">上次异常日志（可长按复制后反馈）：</string>
@@ -101,12 +102,23 @@
     <string name="imagegen_notification_done">图片生成完成，点击查看</string>
     <string name="imagegen_notification_failed">图片生成失败</string>
     <string name="imagegen_channel_name">AI 绘图任务</string>
+    <string name="imagegen_busy_short">生成中…</string>
+    <string name="imagegen_result">本次结果（点击看大图）</string>
+    <string name="imagegen_history">历史记录</string>
+    <string name="imagegen_history_empty">还没有生成记录，试试上面的开始生成吧</string>
+    <string name="preview_save">保存到相册</string>
+    <string name="preview_saved">已保存到相册</string>
+    <string name="preview_close">关闭</string>
 
     <!-- 绘图模型标记 -->
     <string name="imagegen_tag_section">绘图模型标记</string>
     <string name="imagegen_tag_hint">中转站的模型名不一定规范，自动识别只作默认值。若「AI 绘图」里找不到某个绘图模型（或混进了文本模型），到这里手动勾选即可，勾选结果优先于自动识别。</string>
     <string name="imagegen_tag_button">绘图模型标记</string>
+    <string name="model_tag_title">模型能力标签</string>
+    <string name="model_tag_section">模型能力标签</string>
+    <string name="model_tag_hint">给每个模型手动标注能力：🧠思考（发送思考等级）/ 📷识图（可发图片）/ 🎨绘图（用于 AI 绘图）。中转站模型名不一定规范，自动识别只作默认值，这里的手动勾选永远优先。</string>
     <string name="imagegen_tag_saved">已保存，共标记 %1$d 个绘图模型</string>
+    <string name="model_tag_saved">已保存模型能力标签</string>
 
     <!-- 备份与恢复 -->
     <string name="backup_section">备份与恢复</string>

@@ -31,6 +31,10 @@ public class ModelDef {
      * 漏判时用户可手动勾选，误判时用户可手动取消。
      */
     public int imageGenOverride = IMAGE_GEN_AUTO;
+    /** 用户对「识图」的手动标记（同 imageGenOverride 语义） */
+    public int visionOverride = IMAGE_GEN_AUTO;
+    /** 用户对「思考」的手动标记（同 imageGenOverride 语义） */
+    public int thinkingOverride = IMAGE_GEN_AUTO;
     public String effortDialect = "standard"; // standard | newapi
 
     public static final int IMAGE_GEN_AUTO = 0;
@@ -39,9 +43,47 @@ public class ModelDef {
 
     /** 最终判定：手动标记优先，否则用自动推断结果 */
     public boolean isImageGen() {
-        if (imageGenOverride == IMAGE_GEN_ON) return true;
-        if (imageGenOverride == IMAGE_GEN_OFF) return false;
-        return supportsImageGen;
+        return overrideTrue(imageGenOverride, supportsImageGen);
+    }
+
+    /** 最终判定：识图能力，手动标记优先 */
+    public boolean isVision() {
+        return overrideTrue(visionOverride, supportsVision);
+    }
+
+    /** 最终判定：思考能力，手动标记优先 */
+    public boolean isThinking() {
+        return overrideTrue(thinkingOverride, supportsThinking);
+    }
+
+    private static boolean overrideTrue(int override, boolean auto) {
+        if (override == IMAGE_GEN_ON) return true;
+        if (override == IMAGE_GEN_OFF) return false;
+        return auto;
+    }
+
+    /** 与自动推断一致时回到「跟随自动」，避免无谓锁死推断结果 */
+    public void setThinkingTag(boolean tagged) {
+        thinkingOverride = tagged == supportsThinking ? IMAGE_GEN_AUTO : (tagged ? IMAGE_GEN_ON : IMAGE_GEN_OFF);
+    }
+
+    public void setVisionTag(boolean tagged) {
+        visionOverride = tagged == supportsVision ? IMAGE_GEN_AUTO : (tagged ? IMAGE_GEN_ON : IMAGE_GEN_OFF);
+    }
+
+    /** 是否被用户手动打过「思考」标签（0=未标） */
+    public boolean getThinkingTag() {
+        return thinkingOverride != IMAGE_GEN_AUTO && isThinking();
+    }
+
+    /** 是否被用户手动打过「识图」标签（0=未标） */
+    public boolean getVisionTag() {
+        return visionOverride != IMAGE_GEN_AUTO && isVision();
+    }
+
+    /** 是否被用户手动打过「绘图」标签（0=未标） */
+    public boolean getImageGenTag() {
+        return imageGenOverride != IMAGE_GEN_AUTO && isImageGen();
     }
 
     /**

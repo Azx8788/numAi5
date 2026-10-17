@@ -97,73 +97,17 @@ public class ModelCatalog {
             ModelDef m = new ModelDef(id, id, providerId, false, false);
             m.rawId = rawId;
             inferCapabilities(m, rawId);
-            if (m.supportsThinking && m.supportsVision) m.displayName += " (🧠📷)";
-            else if (m.supportsThinking) m.displayName += " (🧠)";
-            else if (m.supportsVision) m.displayName += " (📷)";
+            if (m.isThinking() && m.isVision()) m.displayName += " (🧠📷)";
+            else if (m.isThinking()) m.displayName += " (🧠)";
+            else if (m.isVision()) m.displayName += " (📷)";
             result.add(m);
         }
         return result;
     }
 
-    /** 根据模型 id 推断能力开关 */
+    /** 根据模型 id 推断能力开关（规则在 ModelRegistry，这里是兼容入口） */
     public void inferCapabilities(ModelDef m, String rawId) {
-        if (m == null || rawId == null) return;
-        String lower = rawId.toLowerCase();
-
-        // 思考能力
-        if (lower.contains("reasoner") || lower.contains("r1") ||
-                lower.contains("thinking") || lower.contains("qwq") ||
-                lower.contains("o1") || lower.contains("o3") ||
-                lower.contains("opus") || lower.contains("sonnet") ||
-                lower.contains("deepseek-v4") || lower.contains("qwen3.5") ||
-                lower.contains("qwen3-vl") || lower.contains("gpt-5.4")) {
-            m.supportsThinking = true;
-        }
-
-        // 视觉能力
-        if (lower.contains("vision") || lower.contains("vl") ||
-                lower.contains("gpt-4o") || lower.contains("claude") ||
-                lower.contains("gemini") || lower.contains("qwen3-vl") ||
-                lower.contains("deepseek-v4-flash-vision")) {
-            m.supportsVision = true;
-        }
-
-        // 不支持 function calling 的黑名单（B5）
-        if (lower.contains("deepseek-reasoner") || lower.contains("qwq")) {
-            m.supportsTools = false;
-        }
-
-        // DeepSeek V4 hybrid + tools 需回传 reasoning_content（A1）
-        if (lower.contains("deepseek-v4") && m.supportsTools) {
-            m.keepReasoningInHistory = true;
-        }
-
-        // o系/gpt-5 用 max_completion_tokens（A4）
-        if (lower.contains("o1") || lower.contains("o3") || lower.contains("gpt-5")) {
-            m.needsMaxCompletionTokens = true;
-        }
-
-        // 纯推理模型不接受 temperature
-        if (lower.contains("o1") || lower.contains("o3") || lower.contains("gpt-5.4") ||
-                lower.contains("qwq")) {
-            m.isReasoningOnly = true;
-        }
-
-        // 图像生成模型（自动推断，仅作默认值；用户可在设置里手动标记覆盖）
-        if (lower.contains("dall-e") || lower.contains("gpt-image") || lower.contains("imagen")
-                || lower.contains("flux") || lower.contains("stable-diffusion")
-                || lower.contains("sdxl") || lower.contains("sd3") || lower.contains("midjourney")
-                || lower.contains("seedream") || lower.contains("seededit")
-                || lower.contains("kolors") || lower.contains("cogview") || lower.contains("wanx")
-                || lower.contains("hunyuan-image") || lower.contains("qwen-image")
-                || lower.contains("imagegen") || lower.contains("image-gen")
-                || lower.contains("-image") || lower.contains("nano-banana")
-                || lower.contains("ideogram") || lower.contains("recraft")
-                || lower.contains("doubao") || lower.contains("t2i")
-                || lower.contains("text-to-image") || lower.contains("文生图")
-                || lower.contains("绘图") || lower.contains("画图")) {
-            m.supportsImageGen = true;
-        }
+        ModelRegistry.applyTo(m, rawId);
     }
 
     /** 汇总所有供应商中的绘图模型（手动标记优先） */
