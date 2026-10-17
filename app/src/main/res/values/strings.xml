@@ -109,6 +109,7 @@
     <string name="preview_save">保存到相册</string>
     <string name="preview_saved">已保存到相册</string>
     <string name="preview_close">关闭</string>
+    <string name="back">返回</string>
 
     <!-- 绘图模型标记 -->
     <string name="imagegen_tag_section">绘图模型标记</string>
