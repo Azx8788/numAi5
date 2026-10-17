@@ -43,6 +43,9 @@ public final class ErrorMapper {
     public static boolean isRetryable(int httpCode, String code, String detail, String body) {
         String all = lower(join(code, detail, body));
         if (isQuota(all) || isAuth(all) || isModelMissing(all)) return false;
+        // 只支持 /v1/responses 的模型：换模型才有用，重试无意义
+        if (all.contains("/v1/responses") && all.contains("does not support")) return false;
+        if (all.contains("concurrency limit") || all.contains("并发")) return true;
         if (httpCode == 429) return true;
         if (httpCode == 408 || httpCode == 425) return true;
         if (httpCode >= 500 && httpCode != 501 && httpCode != 505) return true;
@@ -61,6 +64,10 @@ public final class ErrorMapper {
         if (isAuth(all)) {
             return withDetail("API Key 无效或已失效：请到设置中重新填写该供应商的 Key", httpCode, code, detail);
         }
+        if (all.contains("/v1/responses") && all.contains("does not support")) {
+            return withDetail("该模型只支持 /v1/responses 接口，本应用暂不支持；请改用其它模型"
+                    + "（如 deepseek、claude 系）", httpCode, code, detail);
+        }
         if (isModelMissing(all)) {
             return withDetail("模型不可用：该站没有此模型或当前无可用渠道，请重新拉取模型并另选一个", httpCode, code, detail);
         }
@@ -69,6 +76,9 @@ public final class ErrorMapper {
         }
         if (isContentFilter(all)) {
             return withDetail("内容被上游安全策略拦截，请调整表述后重试", httpCode, code, detail);
+        }
+        if (all.contains("concurrency limit") || all.contains("并发")) {
+            return withDetail("上游并发超限：该账号同时进行的请求过多，稍后会自动重试", httpCode, code, detail);
         }
         if (httpCode == 429) {
             return withDetail("请求过于频繁：已被上游限流，稍后会自动重试", httpCode, code, detail);
