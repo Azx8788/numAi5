@@ -1,24 +1,32 @@
 package io.github.numai5.ui;
 
 import android.app.Activity;
+import android.util.Log;
 import android.view.DragEvent;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.FrameLayout;
+import android.widget.LinearLayout;
+import android.widget.TextView;
 import java.util.HashMap;
 import java.util.Map;
 import io.github.numai5.R;
 
 /**
- * 工具按钮自由摆放宿主：把工具按钮从工具栏"摘"出来，挂到全屏 FrameLayout 上，
- * 长按拖动可放到屏幕任意位置；位置按屏幕比例持久化（配置读取回调由外部提供）。
+ * 工具按钮自由摆放宿主：长按按钮拖到屏幕任意位置停靠，拖回输入栏恢复原位。
  *
- * 设计要点：
- * - 按钮仍在视图树上，点击事件照常工作；只是父容器换成了全屏 overlay；
- * - 拖动用系统 DragAndDrop（与原排序一致的交互习惯），ACTION_DROP 的落点即新位置；
- * - 悬浮按钮默认吸边（左右居中可选），存比例坐标，旋转/分屏后按比例还原；
- * - 低开销：无服务、无 SYSTEM_ALERT_WINDOW 权限（仅在自家 Activity 窗口内摆放）。
+ * 结构：按钮从 toolbar 摘下，挂到 android.R.id.content（Activity 窗口内），
+ * 位置按屏幕比例持久化；旋转/重建后按比例还原。无系统悬浮窗权限需求。
+ *
+ * 拖放处理要点（踩过坑）：
+ * - 只在根布局挂一个 OnDragListener：Drop 事件按命中区域向多个监听着派发时，
+ *   同一按钮会被多个监听者反复 removeView/addView，触发 "child already has a
+ *   parent" 崩溃（表现是拖回输入栏时 App 直接弹回桌面）；
+ * - DROP 处理器里绝不动视图树：只记录意图，等 ACTION_DRAG_ENDED 之后再 post 到
+ *   主线程队列里实施，避免拖影绘制与视图迁移竞争；
+ * - 移动视图前无条件从旧父容器摘除，杜绝重复停靠导致崩溃;
+ * - 停靠还原时克隆原始 LayoutParams（含 btnModel 的 weight 拉伸）。
  */
 public class FloatingToolHost {
 
@@ -26,12 +34,19 @@ public class FloatingToolHost {
     public interface Store {
         /** @return "name:xRatio,yRatio;name2:..." 或 null */
         String load();
+
         void save(String state);
     }
 
+    private static final String TAG = "FloatingToolHost";
+    private static final int MODE_NONE = 0;
+    private static final int MODE_DOCK = 1;
+    private static final int MODE_FLOAT = 2;
+
     private static final class Placement {
-        float xRatio = -1f; // <0 表示未自定义，留在工具栏原位
+        float xRatio = -1f; // <0 表示未自定义
         float yRatio = -1f;
+
         boolean floating() {
             return xRatio >= 0f && yRatio >= 0f;
         }
@@ -41,7 +56,17 @@ public class FloatingToolHost {
     private final ViewGroup toolBar;
     private final Store store;
     private final Map<String, Placement> placements = new HashMap<>();
-    private final Map<String, FrameLayout.LayoutParams> barParams = new HashMap<>();
+    private final Map<String, ViewGroup.LayoutParams> dockParams = new HashMap<>();
+
+    private View btnImage;
+    private View btnThinking;
+    private View btnModel;
+
+    // DragAndDrop 意图暂存（DROP 只记录，ENDED 后统一执行）
+    private int pendingMode = MODE_NONE;
+    private String pendingName;
+    private float pendingXRatio;
+    private float pendingYRatio;
 
     public FloatingToolHost(Activity activity, ViewGroup toolBar, Store store) {
         this.activity = activity;
@@ -49,91 +74,134 @@ public class FloatingToolHost {
         this.store = store;
     }
 
-    /** 在 Activity 内容就绪后调用：恢复持久化位置并接管拖动 */
+    public void register(String name, View v) {
+        if ("btnImage".equals(name)) btnImage = v;
+        else if ("btnThinking".equals(name)) btnThinking = v;
+        else if ("btnModel".equals(name)) btnModel = v;
+    }
+
+    /** Activity 内容就绪后调用：恢复持久化位置并接管拖放 */
     public void attach() {
         loadState();
         for (String name : placements.keySet()) {
             Placement p = placements.get(name);
             if (p != null && p.floating()) {
                 View v = findTool(name);
-                if (v != null) makeFloating(v, name, p);
+                if (v != null) makeFloatingNow(v, name, p);
             }
         }
-        enableDragEverywhere();
+        enableLongPressDrag();
+        ViewGroup root = rootLayout();
+        if (root != null) {
+            root.setOnDragListener(this::handleDragEvents);
+        }
     }
 
-    // ===== 拖动 =====
+    // ===== 拖放（单一监听入口） =====
 
-    private void enableDragEverywhere() {
+    private void enableLongPressDrag() {
         for (String name : new String[]{"btnImage", "btnThinking", "btnModel"}) {
             View v = findTool(name);
             if (v == null) continue;
             v.setOnLongClickListener(source -> {
                 source.startDragAndDrop(null, new View.DragShadowBuilder(source), source, 0);
-                android.widget.Toast.makeText(activity, R.string.tool_drag_hint,
-                        android.widget.Toast.LENGTH_SHORT).show();
+                ToastCompat.show(activity, R.string.tool_drag_hint);
                 return true;
             });
-            // 全屏 overlay 接收 DROP：浮动按钮自身也要能接收（拖到别的浮动按钮上）
-            v.setOnDragListener(this::handleDrop);
         }
-        // 在工具栏与根布局上接 DROP（拖回工具栏 = 取消悬浮）
-        toolBar.setOnDragListener(this::handleDrop);
-        ViewGroup root = rootLayout();
-        if (root != null) root.setOnDragListener(this::handleDrop);
     }
 
-    private boolean handleDrop(View target, DragEvent event) {
-        if (event.getAction() != DragEvent.ACTION_DROP) return true;
-        Object state = event.getLocalState();
-        if (!(state instanceof View)) return true;
-        View dragged = (View) state;
-        String name = toolName(dragged);
-        if (name == null) return true;
-
-        // 拖回工具栏：取消悬浮，回到原排序位
-        if (isInside(target, toolBar) || target.getId() == toolBar.getId()) {
-            dockBack(name);
+    private boolean handleDragEvents(View target, DragEvent event) {
+        int action = event.getAction();
+        if (action == DragEvent.ACTION_DROP) {
+            Object state = event.getLocalState();
+            if (state instanceof View) {
+                String name = toolName((View) state);
+                if (name != null) {
+                    recordDrop(name, event.getX(), event.getY());
+                }
+            }
             return true;
         }
+        if (action == DragEvent.ACTION_DRAG_ENDED) {
+            if (pendingMode != MODE_NONE) {
+                ViewGroup root = rootLayout();
+                if (root != null) {
+                    // 双 post：等拖拽结束、拖影彻底释放后再动视图树
+                    root.post(() -> root.post(this::applyPending));
+                }
+            }
+            return true;
+        }
+        // DRAG_STARTED 必须返回 true 才能持续收到后续事件
+        return action == DragEvent.ACTION_DRAG_STARTED || action == DragEvent.ACTION_DRAG_ENTERED
+                || action == DragEvent.ACTION_DRAG_LOCATION
+                || action == DragEvent.ACTION_DRAG_EXITED;
+    }
 
-        // 拖到屏幕其它位置：按落点计算比例坐标并悬浮
+    /** DROP 时只记录落点意图，不碰视图树 */
+    private void recordDrop(String name, float x, float y) {
         ViewGroup root = rootLayout();
-        if (root == null) return true;
-        int[] loc = new int[2];
-        root.getLocationOnScreen(loc);
-        // event 坐标是相对 target 的，统一换算成屏幕坐标再转比例
-        int[] tLoc = new int[2];
-        target.getLocationOnScreen(tLoc);
-        float screenX = tLoc[0] + event.getX();
-        float screenY = tLoc[1] + event.getY();
-        float xRatio = clamp01((screenX - loc[0]) / (float) root.getWidth());
-        float yRatio = clamp01((screenY - loc[1]) / (float) root.getHeight());
+        if (root == null) return;
+        int[] rootLoc = new int[2];
+        root.getLocationOnScreen(rootLoc);
+        float screenX = rootLoc[0] + x;
+        float screenY = rootLoc[1] + y;
 
-        Placement p = new Placement();
-        p.xRatio = xRatio;
-        p.yRatio = yRatio;
-        makeFloating(dragged, name, p);
-        placements.put(name, p);
-        saveState();
-        return true;
+        pendingName = name;
+        if (hitToolBar(screenX, screenY)) {
+            pendingMode = MODE_DOCK;
+        } else {
+            pendingMode = MODE_FLOAT;
+            pendingXRatio = clamp01((screenX - rootLoc[0]) / (float) Math.max(1, root.getWidth()));
+            pendingYRatio = clamp01((screenY - rootLoc[1]) / (float) Math.max(1, root.getHeight()));
+        }
+    }
+
+    /** 拖拽完全结束后落地执行 */
+    private void applyPending() {
+        if (pendingMode == MODE_NONE) return;
+        String name = pendingName;
+        int mode = pendingMode;
+        pendingMode = MODE_NONE;
+        pendingName = null;
+        try {
+            if (mode == MODE_DOCK) {
+                dockBack(name);
+            } else {
+                Placement p = new Placement();
+                p.xRatio = clamp01(pendingXRatio);
+                p.yRatio = clamp01(pendingYRatio);
+                View v = findTool(name);
+                if (v != null) {
+                    if (v.getParent() == rootLayout()) {
+                        positionFloating(v, p);          // 已浮动：原地挪动
+                    } else {
+                        makeFloatingNow(v, name, p);     // 从工具栏摘下
+                    }
+                }
+                placements.put(name, p);
+            }
+            saveState();
+        } catch (Throwable t) {
+            Log.e(TAG, "apply pending placement", t);
+        }
     }
 
     // ===== 悬浮 / 停靠 =====
 
-    private void makeFloating(View v, String name, Placement p) {
+    private void makeFloatingNow(View v, String name, Placement p) {
         ViewGroup root = rootLayout();
-        if (root == null || v.getParent() == root) return;
+        if (root == null) return;
         ViewGroup parent = (ViewGroup) v.getParent();
-        if (parent == null) return;
+        if (parent != null) {
+            // 克隆原始参数（保存 weight 等），停靠时还原
+            dockParams.put(name, cloneLayoutParams(v.getLayoutParams()));
+            parent.removeView(v);
+        }
 
-        barParams.put(name, v.getLayoutParams() instanceof FrameLayout.LayoutParams
-                ? (FrameLayout.LayoutParams) v.getLayoutParams()
-                : new FrameLayout.LayoutParams(wrap(v), wrap(v)));
-
+        // btnModel 在工具栏里是 0dp+weight（width==0），直接沿用会变成 0 宽不可见
         ViewGroup.LayoutParams old = v.getLayoutParams();
-        // 注意：btnModel 在工具栏里是 0dp+weight（width==0），直接沿用会变成 0 宽（不可见）；
-        // 只有正数值才是明确的固定尺寸，其余（0 / MATCH_PARENT / WRAP_CONTENT）一律转 WRAP_CONTENT
         int w = old.width > 0 ? old.width : ViewGroup.LayoutParams.WRAP_CONTENT;
         int h = old.height > 0 ? old.height : ViewGroup.LayoutParams.WRAP_CONTENT;
         FrameLayout.LayoutParams fp = new FrameLayout.LayoutParams(w, h);
@@ -141,22 +209,14 @@ public class FloatingToolHost {
             fp.leftMargin = ((ViewGroup.MarginLayoutParams) old).leftMargin;
             fp.topMargin = ((ViewGroup.MarginLayoutParams) old).topMargin;
         }
-
-        // 浮动时限制文本按钮最大宽度（屏幕的 60%），避免超长模型名撑满整屏；停靠时还原
-        if (v instanceof android.widget.TextView) {
+        // 浮动文本按钮限宽 60% 屏幕，避免超长模型名撑满；停靠时还原
+        if (v instanceof TextView) {
             int max = Math.round(root.getWidth() * 0.6f);
-            if (max > 0) ((android.widget.TextView) v).setMaxWidth(max);
+            if (max > 0) ((TextView) v).setMaxWidth(max);
         }
 
-        parent.removeView(v);
         root.addView(v, fp);
-
-        // 等布局完成后再定位（需要真实尺寸）
         v.post(() -> positionFloating(v, p));
-    }
-
-    private int wrap(View v) {
-        return ViewGroup.LayoutParams.WRAP_CONTENT;
     }
 
     private void positionFloating(View v, Placement p) {
@@ -169,7 +229,6 @@ public class FloatingToolHost {
             return;
         }
         FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) v.getLayoutParams();
-        // 以按钮中心为锚点，吸边内缩 8dp 防止拖出一半
         int edge = Math.round(8 * v.getResources().getDisplayMetrics().density);
         int x = Math.round(p.xRatio * root.getWidth()) - w / 2;
         int y = Math.round(p.yRatio * root.getHeight()) - h / 2;
@@ -181,27 +240,30 @@ public class FloatingToolHost {
         v.setLayoutParams(lp);
     }
 
-    /** 取消悬浮：放回工具栏原位（按 barParams 还原布局参数与宽度限制，追加到末尾） */
+    /** 取消悬浮：无条件从旧父容器摘下，再放回工具栏（按克隆参数还原） */
     private void dockBack(String name) {
         View v = findTool(name);
         if (v == null) return;
-        ViewGroup root = rootLayout();
-        if (root != null && v.getParent() == root) root.removeView(v);
-        if (v instanceof android.widget.TextView) {
-            ((android.widget.TextView) v).setMaxWidth(Integer.MAX_VALUE);
+        ViewGroup parent = (ViewGroup) v.getParent();
+        if (parent != null) parent.removeView(v);
+        if (v instanceof TextView) {
+            ((TextView) v).setMaxWidth(Integer.MAX_VALUE);
         }
-        ViewGroup.LayoutParams lp = barParams.get(name);
-        toolBar.addView(v, lp != null ? lp : generateDefault(v));
+        ViewGroup.LayoutParams lp = dockParams.get(name);
+        if (lp == null) {
+            lp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        }
+        toolBar.addView(v, lp);
         placements.remove(name);
-        saveState();
     }
 
-    private ViewGroup.LayoutParams generateDefault(View v) {
-        // toolBar 是 LinearLayout；generateDefaultLayoutParams 是 protected，
-        // 这里按等效语义手工构造（水平 LinearLayout 的默认：WRAP_CONTENT）
-        android.widget.LinearLayout.LayoutParams lp = new android.widget.LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        return lp;
+    private boolean hitToolBar(float screenX, float screenY) {
+        int[] loc = new int[2];
+        toolBar.getLocationOnScreen(loc);
+        float tollerance = 12 * toolBar.getResources().getDisplayMetrics().density;
+        return screenX >= loc[0] - tollerance && screenX <= loc[0] + toolBar.getWidth() + tollerance
+                && screenY >= loc[1] - tollerance && screenY <= loc[1] + toolBar.getHeight() + tollerance;
     }
 
     // ===== 持久化 =====
@@ -240,6 +302,20 @@ public class FloatingToolHost {
 
     // ===== 工具 =====
 
+    private static ViewGroup.LayoutParams cloneLayoutParams(ViewGroup.LayoutParams src) {
+        if (src == null) return null;
+        if (src instanceof LinearLayout.LayoutParams) {
+            return new LinearLayout.LayoutParams((LinearLayout.LayoutParams) src);
+        }
+        if (src instanceof FrameLayout.LayoutParams) {
+            return new FrameLayout.LayoutParams((FrameLayout.LayoutParams) src);
+        }
+        if (src instanceof ViewGroup.MarginLayoutParams) {
+            return new FrameLayout.LayoutParams((ViewGroup.MarginLayoutParams) src);
+        }
+        return new FrameLayout.LayoutParams(src.width, src.height);
+    }
+
     private String toolName(View v) {
         int id = v.getId();
         if (id == R.id.btnImage) return "btnImage";
@@ -249,37 +325,28 @@ public class FloatingToolHost {
     }
 
     private View findTool(String name) {
-        // 浮动中的按钮不在 toolBar 里，也要能找到
-        if (btnImage != null && "btnImage".equals(name)) return btnImage;
-        if (btnThinking != null && "btnThinking".equals(name)) return btnThinking;
-        if (btnModel != null && "btnModel".equals(name)) return btnModel;
+        if ("btnImage".equals(name)) return btnImage;
+        if ("btnThinking".equals(name)) return btnThinking;
+        if ("btnModel".equals(name)) return btnModel;
         return null;
-    }
-
-    private View btnImage;
-    private View btnThinking;
-    private View btnModel;
-
-    public void register(String name, View v) {
-        if ("btnImage".equals(name)) btnImage = v;
-        else if ("btnThinking".equals(name)) btnThinking = v;
-        else if ("btnModel".equals(name)) btnModel = v;
     }
 
     private ViewGroup rootLayout() {
         return (ViewGroup) activity.findViewById(android.R.id.content);
     }
 
-    private static boolean isInside(View target, ViewGroup container) {
-        while (target != null) {
-            if (target == container) return true;
-            if (!(target.getParent() instanceof View)) return false;
-            target = (View) target.getParent();
-        }
-        return false;
-    }
-
     private static float clamp01(float f) {
         return Math.max(0f, Math.min(1f, f));
+    }
+
+    /** 尽力 Toast：不依赖主题，防个别机型抛异常 */
+    private static final class ToastCompat {
+        static void show(Activity activity, int resId) {
+            try {
+                android.widget.Toast.makeText(activity, resId,
+                        android.widget.Toast.LENGTH_SHORT).show();
+            } catch (Throwable ignored) {
+            }
+        }
     }
 }
