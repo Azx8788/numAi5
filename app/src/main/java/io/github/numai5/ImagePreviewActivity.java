@@ -30,6 +30,26 @@ public class ImagePreviewActivity extends AppCompatActivity {
 
     private String filePath;
 
+
+    // ===== 全局界面适配（界面大小 / 边距） =====
+
+    @Override
+    protected void attachBaseContext(android.content.Context newBase) {
+        super.attachBaseContext(io.github.numai5.data.UiSettings.wrap(newBase));
+    }
+
+    @Override
+    protected void onPostCreate(android.os.Bundle savedInstanceState) {
+        super.onPostCreate(savedInstanceState);
+        io.github.numai5.data.UiSettings.applyMargins(this);
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        io.github.numai5.data.UiSettings.checkGeneration(this);
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);

@@ -94,10 +94,29 @@ public class MainActivity extends AppCompatActivity implements StreamSession.Lis
     private ThinkingLevel pendingLevel = ThinkingLevel.DEFAULT;
     private final List<String> pendingImages = new ArrayList<>();
 
+
+    // ===== 全局界面适配（界面大小 / 边距） =====
+
+    @Override
+    protected void attachBaseContext(android.content.Context newBase) {
+        super.attachBaseContext(io.github.numai5.data.UiSettings.wrap(newBase));
+    }
+
+    @Override
+    protected void onPostCreate(android.os.Bundle savedInstanceState) {
+        super.onPostCreate(savedInstanceState);
+        io.github.numai5.data.UiSettings.applyMargins(this);
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+
+        // 首次启动：先让用户调整界面（安卓 5 各机型布局差异大），确认后不再弹出
+        if (!io.github.numai5.data.UiSettings.isTuned(this)) {
+            startActivity(new Intent(this, TuneActivity.class));
+        }
 
         chatManager = ChatManager.getInstance(this);
         configManager = ConfigManager.getInstance(this);
@@ -635,6 +654,8 @@ public class MainActivity extends AppCompatActivity implements StreamSession.Lis
     @Override
     protected void onResume() {
         super.onResume();
+        // 界面大小 / 边距在别处改过：重建本页立即生效
+        io.github.numai5.data.UiSettings.checkGeneration(this);
         // 设置页返回：若此前跟随默认模型则更新为新默认；已有临时选择则保留
         ModelDef previousDefault = defaultModel;
         refreshDefaultModel();

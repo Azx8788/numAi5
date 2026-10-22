@@ -40,6 +40,12 @@
             android:name=".ImageGenActivity"
             android:label="@string/ai_image_gen" />
 
+        <!-- 调整界面（全局缩放 / 边距；首次启动自动打开） -->
+        <activity
+            android:name=".TuneActivity"
+            android:label="@string/tune_title"
+            android:windowSoftInputMode="adjustResize" />
+
         <!-- 生图后台服务（前台服务 + 通知） -->
         <service
             android:name=".ImageGenService"

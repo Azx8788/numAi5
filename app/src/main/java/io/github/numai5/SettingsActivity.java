@@ -44,7 +44,7 @@ import io.github.numai5.ui.ModelSelectorSheet;
 public class SettingsActivity extends AppCompatActivity {
 
     private LinearLayout providerList;
-    private Button btnAddProvider, btnDefaultModel, btnSave, btnExportBackup, btnImportBackup, btnImageGenTag;
+    private Button btnAddProvider, btnDefaultModel, btnSave, btnExportBackup, btnImportBackup, btnImageGenTag, btnUiTune;
     private EditText editSystemPrompt;
     private SwitchMaterial switchNewapi;
     private ConfigManager configManager;
@@ -59,6 +59,26 @@ public class SettingsActivity extends AppCompatActivity {
      * 表现为「一打开设置页就闪退」。必须在 onCreate 之后创建。
      */
     private ApiService apiService;
+
+
+    // ===== 全局界面适配（界面大小 / 边距） =====
+
+    @Override
+    protected void attachBaseContext(android.content.Context newBase) {
+        super.attachBaseContext(io.github.numai5.data.UiSettings.wrap(newBase));
+    }
+
+    @Override
+    protected void onPostCreate(android.os.Bundle savedInstanceState) {
+        super.onPostCreate(savedInstanceState);
+        io.github.numai5.data.UiSettings.applyMargins(this);
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        io.github.numai5.data.UiSettings.checkGeneration(this);
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -77,6 +97,7 @@ public class SettingsActivity extends AppCompatActivity {
         btnExportBackup = findViewById(R.id.btnExportBackup);
         btnImportBackup = findViewById(R.id.btnImportBackup);
         btnImageGenTag = findViewById(R.id.btnImageGenTag);
+        btnUiTune = findViewById(R.id.btnUiTune);
         editSystemPrompt = findViewById(R.id.editSystemPrompt);
         switchNewapi = findViewById(R.id.switchNewapi);
 
@@ -97,6 +118,7 @@ public class SettingsActivity extends AppCompatActivity {
         btnExportBackup.setOnClickListener(v -> startExport());
         btnImportBackup.setOnClickListener(v -> startImport());
         btnImageGenTag.setOnClickListener(v -> showModelTagDialog());
+        btnUiTune.setOnClickListener(v -> startActivity(new Intent(this, TuneActivity.class)));
     }
 
     // ===== 绘图模型标记 =====

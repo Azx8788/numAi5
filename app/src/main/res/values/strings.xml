@@ -49,6 +49,26 @@
     <string name="thinking_default_label">🧠 Default</string>
 
     <!-- 多供应商 -->
+    <!-- 调整界面（全局缩放 / 边距） -->
+    <string name="tune_title">调整界面</string>
+    <string name="tune_intro">首次使用，非常建议调整下界面哦~\n调整下面的选项，然后查看预览\n直到对布局满意为止</string>
+    <string name="tune_reset">恢复默认</string>
+    <string name="tune_scale_label">界面大小</string>
+    <string name="tune_scale_hint">有效范围：0.25 倍 - 5.00 倍，建议少量多次调节</string>
+    <string name="tune_margin_label">界面边距</string>
+    <string name="tune_margin_h">横向</string>
+    <string name="tune_margin_v">纵向</string>
+    <string name="tune_margin_hint">第一个输入框为横向边距，第二个输入框为纵向边距，单位百分比。\n出于保护，数值超过 30 不会保存。</string>
+    <string name="tune_preview">查看预览</string>
+    <string name="tune_confirm">确认设置</string>
+    <string name="tune_footer_hint">调整页自身不缩放，即使数值调得太大或太小，也可以回到这里恢复默认。</string>
+    <string name="tune_scale_clamped">界面大小需在 0.25 - 5.00 之间，已自动调整</string>
+    <string name="tune_margin_clamped">边距超过 30%，该项未保存</string>
+    <string name="tune_saved">设置已保存</string>
+    <string name="tune_extreme_warning">已保存，但该倍率下界面可能难以操作；下次启动会自动回到调整页，方便你改回</string>
+    <string name="ui_tune_entry">调整界面（缩放 / 边距）</string>
+    <string name="ui_tune_section">界面适配</string>
+    <string name="ui_tune_hint">布局显示异常、文字太大/太小、边缘被遮挡时，到这里整体缩放或留出边距。安卓 5 各机型布局差异较大，建议先调这里。</string>
     <string name="provider_list">供应商</string>
     <string name="provider_badge_modelscope">[生图异步]</string>
     <string name="modelscope_token_hint">魔搭访问令牌（ms- 开头，账号设置 → 访问令牌）</string>
