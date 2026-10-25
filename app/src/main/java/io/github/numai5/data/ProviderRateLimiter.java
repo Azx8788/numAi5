@@ -72,8 +72,18 @@ public final class ProviderRateLimiter {
      * 其余参数集中在这里，避免散落到各个调用类。
      */
     public static final class Defaults {
-        /** 同一供应商最大并发 HTTP 请求数 */
-        public static final int MAX_CONCURRENT = 1;
+        /**
+         * 同一供应商最大并发 HTTP 请求数。
+         *
+         * 取 2 而不是 1 是刻意保留「后台绘画 + 新会话聊天」这个既有用法：
+         * 聊天 SSE 会一直占着许可直到整段回复结束，若总并发只有 1，后台生图的轮询会被
+         * 挤到轮询超时，用户就再也拿不到那张图。这里放开到「聊天 1 + 生图 1」，
+         * 同一类型仍然串行（同一时刻不会有 2 个聊天或 2 个生图）。
+         * 想更保守可以改成 1，但会牺牲并行能力。
+         */
+        public static final int MAX_CONCURRENT = 2;
+        /** 同一类型的并发上限：保证同一时刻不会有两个聊天或两个生图同时在跑 */
+        public static final int MAX_CONCURRENT_PER_TYPE = 1;
         /** 最小实际发送间隔（秒），Provider.minIntervalSec 为 0 时使用该默认值 */
         public static final int MIN_INTERVAL_SEC = 5;
         /** 滚动窗口内的最大发送次数 */
@@ -119,6 +129,9 @@ public final class ProviderRateLimiter {
     };
 
     private static volatile Clock clock = REAL_CLOCK;
+
+    /** 最近一次 awaitTurn 在队列里等的毫秒数（按线程隔离，调用方可读取） */
+    private static final ThreadLocal<Long> LAST_WAIT_MS = new ThreadLocal<>();
 
     /** 每个供应商一把锁（一把锁 + 一条队列 + 一份额度账本） */
     private static final Map<String, Gate> GATES = new HashMap<>();
@@ -341,7 +354,8 @@ public final class ProviderRateLimiter {
                                 "供应商限流冷却中，预计还需 " + ceilSeconds(cooldownLeft)
                                         + " 秒恢复，已超过本次请求的等待上限", ceilSeconds(cooldownLeft));
                     }
-                } else if (isHead(gate, entry) && gate.runningCount < maxConcurrent()) {
+                } else if (isHead(gate, entry) && gate.runningCount < maxConcurrent()
+                        && runningOfType(gate, entry.type) < Defaults.MAX_CONCURRENT_PER_TYPE) {
                     long intervalLeft = gate.lastSendMs + minIntervalMs(entry) - now;
                     if (intervalLeft <= 0) {
                         pruneWindow(gate, now);
@@ -464,6 +478,15 @@ public final class ProviderRateLimiter {
      * 该供应商该类型的取消计数。调用方在长时间循环（如魔搭轮询）开始前记下它，
      * 每轮比较一次：一旦用户取消，后续轮询不再发起新的 HTTP 请求。
      */
+    /**
+     * 最近一次 {@link #awaitTurn} 因为排队/限流等待了多久（毫秒）。
+     * 供魔搭轮询把「排队等待」从自己的总时限里扣除，避免排队把任务挤成超时。
+     */
+    public static long lastWaitMs() {
+        Long value = LAST_WAIT_MS.get();
+        return value == null ? 0L : value;
+    }
+
     public static long cancelEpoch(Provider provider, RequestType type) {
         if (provider == null || type == null) return 0;
         Gate gate = gateFor(provider);
@@ -558,6 +581,8 @@ public final class ProviderRateLimiter {
         entry.state = State.GRANTED;
         entry.permitHeld = true;
         gate.runningCount++;
+        // 记录本次排队等了多久：长任务（魔搭轮询）据此把等待时间从自己的超时预算里扣掉
+        LAST_WAIT_MS.set(now - entry.enqueuedAtMs);
         gate.waiting.remove(entry);
         gate.active.addLast(entry);
         gate.lastSendMs = now;
@@ -602,6 +627,14 @@ public final class ProviderRateLimiter {
 
     private static int maxConcurrent() {
         return Defaults.MAX_CONCURRENT;
+    }
+
+    private static int runningOfType(Gate gate, RequestType type) {
+        int count = 0;
+        for (Entry e : gate.active) {
+            if (e.type == type && !e.terminal) count++;
+        }
+        return count;
     }
 
     private static int rpmLimit() {

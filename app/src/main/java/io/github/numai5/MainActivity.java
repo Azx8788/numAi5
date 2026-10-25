@@ -55,6 +55,11 @@ import io.github.numai5.vision.ImagePicker;
  * 生命周期：旋转等重建由进程级 StreamSession 保留执行状态；进程被杀不伪装仍在生成。
  */
 public class MainActivity extends AppCompatActivity implements StreamSession.Listener {
+    /** 从「调整界面 → 查看预览」进入主界面：只预览，不自动弹调整页 */
+    public static final String EXTRA_PREVIEW_TUNING = "previewTuning";
+    /** 本进程是否已自动弹过调整页（未确认时避免反复弹出） */
+    private static boolean tunePromptShown;
+
 
     private static final String STATE_CHAT_ID = "chatId";
     private static final String STATE_PENDING_MODEL = "pendingModelId";
@@ -117,8 +122,13 @@ public class MainActivity extends AppCompatActivity implements StreamSession.Lis
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
-        // 首次启动：先让用户调整界面（安卓 5 各机型布局差异大），确认后不再弹出
-        if (!io.github.numai5.data.UiSettings.isTuned(this)) {
+        // 首次启动：先让用户调整界面（安卓 5 各机型布局差异大），确认后不再弹出。
+        // previewTuning：从「查看预览」进来时不自动弹调整页，否则预览会被立刻顶掉；
+        // tunePromptShown：同一进程只自动弹一次，避免用户返回后又被强行拉回调整页。
+        boolean previewTuning = getIntent() != null
+                && getIntent().getBooleanExtra(EXTRA_PREVIEW_TUNING, false);
+        if (!previewTuning && !io.github.numai5.data.UiSettings.isTuned(this) && !tunePromptShown) {
+            tunePromptShown = true;
             startActivity(new Intent(this, TuneActivity.class));
         }
 

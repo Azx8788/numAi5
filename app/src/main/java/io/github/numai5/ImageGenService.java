@@ -126,7 +126,8 @@ public class ImageGenService extends Service {
     }
 
     private void finishTask(List<String> filenames, String error) {
-        ImageGenManager manager = ImageGenManager.getInstance();
+        // 用带 Context 的重载，避免进程内单例尚未初始化时把结果丢掉（历史/通知都不写）
+        ImageGenManager manager = ImageGenManager.getInstance(getApplicationContext());
         if (manager != null) {
             manager.onFinished(filenames, error);
         }

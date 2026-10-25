@@ -60,6 +60,7 @@
     <string name="tune_margin_v">纵向</string>
     <string name="tune_margin_hint">第一个输入框为横向边距，第二个输入框为纵向边距，单位百分比。\n出于保护，数值超过 30 不会保存。</string>
     <string name="tune_preview">查看预览</string>
+    <string name="tune_preview_hint">预览中：按返回键可继续调整界面</string>
     <string name="tune_confirm">确认设置</string>
     <string name="tune_footer_hint">调整页自身不缩放，即使数值调得太大或太小，也可以回到这里恢复默认。</string>
     <string name="tune_scale_clamped">界面大小需在 0.25 - 5.00 之间，已自动调整</string>

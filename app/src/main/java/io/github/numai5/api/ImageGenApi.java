@@ -281,10 +281,14 @@ public class ImageGenApi {
                         || e.kind == ErrorMapper.Kind.AUTH) {
                     throw withHint(e, "任务可能仍在服务端生成，请稍后到平台查看结果");
                 }
-                // 网络/5xx：在预算与总时限内继续轮询
+                // 网络/5xx：在预算与总时限内继续轮询（排队等待不算进总时限）
                 lastTransportError = e;
+                deadlineNs += ProviderRateLimiter.lastWaitMs() * 1000000L;
                 continue;
             }
+
+            // 排队等许可的时间不算进生图总时限：后台绘画被聊天占住时不会因此被判超时
+            deadlineNs += ProviderRateLimiter.lastWaitMs() * 1000000L;
 
             JsonObject obj;
             try {

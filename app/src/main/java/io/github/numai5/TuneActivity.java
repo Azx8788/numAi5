@@ -1,5 +1,6 @@
 package io.github.numai5;
 
+import android.content.Intent;
 import android.os.Bundle;
 import android.widget.EditText;
 import android.widget.Toast;
@@ -33,7 +34,7 @@ public class TuneActivity extends AppCompatActivity {
 
         findViewById(R.id.tuneBack).setOnClickListener(v -> finish());
         findViewById(R.id.tuneReset).setOnClickListener(v -> fillInputs(1f, 0f, 0f));
-        findViewById(R.id.tunePreview).setOnClickListener(v -> apply(false));
+        findViewById(R.id.tunePreview).setOnClickListener(v -> preview());
         findViewById(R.id.tuneConfirm).setOnClickListener(v -> apply(true));
 
         fillInputs(UiSettings.getScale(this), UiSettings.getMarginH(this), UiSettings.getMarginV(this));
@@ -56,7 +57,39 @@ public class TuneActivity extends AppCompatActivity {
      * 读取并校验输入，合法则保存。
      * 缩放超出 0.25~5.0 夹紧并提示；边距超过 30 不保存（该项保持原值）。
      */
+    /**
+     * 查看预览：保存当前值（不标记已完成），打开主界面看实际效果。
+     *
+     * 这里不能 finish()：以前预览等于「关掉本页」，而未确认时主界面会再次自动弹回本页，
+     * 表现就是「闪一下又回到调整界面」。本页留在返回栈，按返回键即可继续调整。
+     */
+    private void preview() {
+        saveValues();
+        Intent intent = new Intent(this, MainActivity.class);
+        intent.putExtra(MainActivity.EXTRA_PREVIEW_TUNING, true);
+        intent.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        startActivity(intent);
+        toast(getString(R.string.tune_preview_hint));
+    }
+
     private void apply(boolean confirm) {
+        saveValues();
+        if (confirm) {
+            float scale = UiSettings.getScale(this);
+            if (scale < 0.5f || scale > 2.5f) {
+                // 保护：极端倍率下主界面可能难以操作（按钮被缩得看不见/挤出屏幕）。
+                // 不标记「已完成」，下次启动会自动再进本页，用户可随时改回来。
+                toast(getString(R.string.tune_extreme_warning));
+            } else {
+                UiSettings.markTuned(this);
+                toast(getString(R.string.tune_saved));
+            }
+        }
+        finish();
+    }
+
+    /** 校验并保存三个值（预览与确认共用），非法值夹到合法范围并提示 */
+    private void saveValues() {
         float scale = parse(editScale, 1f);
         if (scale < UiSettings.SCALE_MIN || scale > UiSettings.SCALE_MAX) {
             scale = UiSettings.clampScale(scale);
@@ -82,17 +115,6 @@ public class TuneActivity extends AppCompatActivity {
         }
 
         UiSettings.save(this, scale, marginH, marginV);
-        if (confirm) {
-            if (scale < 0.5f || scale > 2.5f) {
-                // 保护：极端倍率下主界面可能难以操作（按钮被缩得看不见/挤出屏幕）。
-                // 不标记「已完成」，下次启动会自动再进本页，用户可随时改回来。
-                toast(getString(R.string.tune_extreme_warning));
-            } else {
-                UiSettings.markTuned(this);
-                toast(getString(R.string.tune_saved));
-            }
-        }
-        finish();
     }
 
     private float parse(EditText edit, float fallback) {

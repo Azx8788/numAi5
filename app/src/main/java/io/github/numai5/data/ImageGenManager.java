@@ -2,8 +2,12 @@ package io.github.numai5.data;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import java.io.File;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import com.google.gson.Gson;
 import com.google.gson.reflect.TypeToken;
@@ -62,6 +66,8 @@ public class ImageGenManager {
     private String activeModelName = "";
     private Provider activeProvider;
     private List<String> lastResultFiles;
+    /** 是否已做过一次磁盘补录（每个进程只做一次，避免频繁扫目录） */
+    private boolean restoredFromDisk;
 
     private ImageGenManager(Context context) {
         this.appContext = context.getApplicationContext();
@@ -71,6 +77,7 @@ public class ImageGenManager {
     public static synchronized ImageGenManager getInstance(Context context) {
         if (instance == null) {
             instance = new ImageGenManager(context);
+            instance.restoreFromDisk();
         }
         return instance;
     }
@@ -127,9 +134,19 @@ public class ImageGenManager {
         return activeTaskId == null && prefs.getString(KEY_TASK_ID, null) != null;
     }
 
-    /** 丢弃残留的旧任务记录，避免「生图中」状态永久卡住 */
+    /**
+     * 丢弃残留的旧任务记录，避免「生图中」状态永久卡住。
+     *
+     * 只清任务字段，绝不 prefs.clear()：历史记录（KEY_HISTORY）就存在同一个文件里，
+     * 之前用 clear() 会把用户所有历史一并抹掉，导致「关掉绘画窗口后图片再也找不到」。
+     */
     public void discardStaleTask() {
-        prefs.edit().clear().apply();
+        clearActiveTask();
+    }
+
+    /** 只清当前任务字段，历史记录保持不动 */
+    private void clearActiveTask() {
+        prefs.edit().remove(KEY_TASK_ID).remove(KEY_PROMPT).apply();
     }
 
     /**
@@ -176,16 +193,54 @@ public class ImageGenManager {
         prefs.edit().putString(KEY_HISTORY, new Gson().toJson(list)).apply();
     }
 
+    /**
+     * 从磁盘补录历史记录。
+     *
+     * 生图结果落盘在 filesDir/images/gen_*.png；以前历史存在同一个 SharedPreferences 里，
+     * 任务结束时被 clear() 清空过。这里把磁盘上有、历史里没有的生成图补回去，
+     * 让「关掉绘画窗口后找不到那张图」的情况至少还能在绘画记录里翻到。
+     */
+    private synchronized void restoreFromDisk() {
+        if (restoredFromDisk) return;
+        restoredFromDisk = true;
+        File dir = new File(appContext.getFilesDir(), "images");
+        File[] files = dir.listFiles();
+        if (files == null || files.length == 0) return;
+
+        List<HistoryItem> history = getHistory();
+        Set<String> known = new HashSet<>();
+        for (HistoryItem item : history) {
+            if (item != null && item.file != null) known.add(item.file);
+        }
+        boolean changed = false;
+        for (File file : files) {
+            String name = file.getName();
+            if (!name.startsWith("gen_") || !name.endsWith(".png")) continue;
+            if (known.contains(name)) continue;
+            history.add(new HistoryItem(name, "", "", file.lastModified()));
+            changed = true;
+        }
+        if (!changed) return;
+
+        Collections.sort(history, (a, b) -> Long.compare(b.ts, a.ts));
+        while (history.size() > HISTORY_MAX) {
+            history.remove(history.size() - 1);
+        }
+        prefs.edit().putString(KEY_HISTORY, new Gson().toJson(history)).apply();
+    }
+
     /** 服务完成回调：通知全部监听者（界面负责展示） */
     public void onFinished(List<String> filenames, String errorMessage) {
         String taskId = prefs.getString(KEY_TASK_ID, null);
-        prefs.edit().clear().apply();
+        // 提示词要在清任务字段之前读出来，否则写进历史里的提示词是空串
+        String prompt = prefs.getString(KEY_PROMPT, "");
+        clearActiveTask();
         activeTaskId = null;
         activeProvider = null;
         lastResultFiles = (errorMessage == null && filenames != null)
                 ? new ArrayList<>(filenames) : null;
         if (lastResultFiles != null) {
-            appendHistory(lastResultFiles, prefs.getString(KEY_PROMPT, ""), activeModelName);
+            appendHistory(lastResultFiles, prompt, activeModelName);
         }
 
         for (Listener l : new ArrayList<>(listeners)) {
