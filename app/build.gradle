@@ -18,8 +18,8 @@ android {
         applicationId "io.github.numai5"
         minSdk 21
         targetSdk 28          // targetSdk 28 路线：避开 33+ 限制；仍需 disable ExpiredTargetSdkVersion
-        versionCode 5
-        versionName "1.3.0"
+        versionCode 6
+        versionName "1.4.0"
         setProperty("archivesBaseName", "numAi5-$versionName")
     }
 
