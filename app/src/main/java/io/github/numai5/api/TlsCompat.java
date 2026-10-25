@@ -1,8 +1,12 @@
 package io.github.numai5.api;
 
 import android.content.Context;
+import android.util.Base64;
 import android.util.Log;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
+import java.util.Locale;
 import java.security.KeyStore;
 import java.security.SecureRandom;
 import java.security.cert.CertificateException;
@@ -19,8 +23,8 @@ import okhttp3.OkHttpClient;
  * 访问使用 Let's Encrypt 证书的站点（例如 arityflow.top）会报：
  * {@code Trust anchor for certification path not found}。
  *
- * <p>解决办法：把几张常见的公共根证书随 APK 一起打包（assets/certs），
- * 与系统信任库组成复合 TrustManager：
+ * <p>解决办法：把 curl 维护的 Mozilla 公共根证书包（cacert.pem，约 118 张根证书）
+ * 随 APK 打包到 assets/certs，与系统信任库组成复合 TrustManager：
  * <ul>
  *   <li>先按系统信任库校验（保持原有行为）；</li>
  *   <li>只有系统报「找不到信任锚」时才用内置根再校验一次。</li>
@@ -92,7 +96,10 @@ public final class TlsCompat {
         return null;
     }
 
-    /** 读取 assets/certs/*.pem 构建只包含内置根证书的 TrustManager；没有资源时返回 null */
+    /**
+     * 读取 assets/certs 下的 PEM 文件（单个证书或整包 cacert.pem），
+     * 构建只包含内置根证书的 TrustManager；没有资源时返回 null。
+     */
     private static X509TrustManager bundledTrustManager() {
         if (appContext == null) return null;
         try {
@@ -104,10 +111,10 @@ public final class TlsCompat {
             CertificateFactory factory = CertificateFactory.getInstance("X.509");
             int loaded = 0;
             for (String file : files) {
+                if (file == null || !file.toLowerCase(Locale.ROOT).endsWith(".pem")) continue;
                 try (InputStream in = appContext.getAssets().open(ASSET_DIR + "/" + file)) {
-                    X509Certificate cert = (X509Certificate) factory.generateCertificate(in);
-                    keyStore.setCertificateEntry("bundled-" + loaded, cert);
-                    loaded++;
+                    String text = readText(in);
+                    loaded += loadPemBundle(keyStore, factory, text, loaded);
                 } catch (Exception e) {
                     Log.e(TAG, "load bundled cert failed: " + file, e);
                 }
@@ -125,6 +132,49 @@ public final class TlsCompat {
             Log.e(TAG, "bundled trust manager unavailable", e);
         }
         return null;
+    }
+
+    /** 读取整个 PEM 文本（cacert.pem 约 200KB，只读一次） */
+    private static String readText(InputStream in) throws Exception {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        byte[] buffer = new byte[8192];
+        int len;
+        while ((len = in.read(buffer)) != -1) {
+            out.write(buffer, 0, len);
+        }
+        return new String(out.toByteArray(), "UTF-8");
+    }
+
+    /**
+     * 从 PEM 文本里逐个提取证书。整包 cacert.pem 里有多张证书，
+     * CertificateFactory.generateCertificate 只会读第一张，所以这里手动切块。
+     */
+    private static int loadPemBundle(KeyStore keyStore, CertificateFactory factory,
+                                     String text, int offset) {
+        final String begin = "-----BEGIN CERTIFICATE-----";
+        final String end = "-----END CERTIFICATE-----";
+        int count = 0;
+        int from = 0;
+        while (true) {
+            int start = text.indexOf(begin, from);
+            if (start < 0) break;
+            int stop = text.indexOf(end, start);
+            if (stop < 0) break;
+            try {
+                String base64 = text.substring(start + begin.length(), stop)
+                        .replaceAll("\\s+", "");
+                byte[] der = Base64.decode(base64, Base64.DEFAULT);
+                X509Certificate cert = (X509Certificate) factory.generateCertificate(
+                        new ByteArrayInputStream(der));
+                keyStore.setCertificateEntry("bundled-" + (offset + count), cert);
+                count++;
+            } catch (Exception e) {
+                // 个别证书解析失败只跳过该条，不影响整包
+                Log.e(TAG, "skip broken pem block", e);
+            }
+            from = stop + end.length();
+        }
+        return count;
     }
 
     /**

@@ -36,3 +36,12 @@
 | Default | medium | medium |
 | High | high | high |
 | MAX | high | max |
+
+## TLS / 根证书（Android 5 兼容）
+- 原因：Android 5.0 的系统根证书库停留在 2014 年，缺少 ISRG Root X1 等新根，访问 Let's Encrypt 证书的站点会报 `CertPathValidatorException: Trust anchor for certification path not found`。
+- 方案：`assets/certs/cacert.pem`（curl 维护的 Mozilla 根证书包，118 张）+ 系统信任库组成复合 TrustManager（`api/TlsCompat`）：系统校验优先，失败才用内置包再验一次；签名链、有效期、主机名校验全部保留，**不做 trust-all**。
+- 更新流程（建议随版本更新）：
+  1. `curl -O https://curl.se/ca/cacert.pem && curl -O https://curl.se/ca/cacert.pem.sha256`
+  2. `sha256sum -c cacert.pem.sha256`，必须显示 OK
+  3. 替换 `app/src/main/assets/certs/cacert.pem` 与同名 `.sha256` 后重新构建
+- 边界：内置包只补根证书。服务器未发中间证书，或报 `handshake_failure`（TLS 版本/套件问题）时，证书包解决不了，需要服务端补链或改用 Conscrypt。
