@@ -90,11 +90,11 @@ public class ApiService {
         this.apiClient = new ApiClient();
         this.configManager = ConfigManager.getInstance(context);
         this.mainHandler = new Handler(Looper.getMainLooper());
-        this.sseClient = new OkHttpClient.Builder()
+        this.sseClient = TlsCompat.configure(new OkHttpClient.Builder()
                 .connectTimeout(12, TimeUnit.SECONDS)
                 .readTimeout(300, TimeUnit.SECONDS)
                 .writeTimeout(60, TimeUnit.SECONDS)
-                .retryOnConnectionFailure(true)
+                .retryOnConnectionFailure(true))
                 .build();
     }
 

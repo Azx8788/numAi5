@@ -27,6 +27,8 @@ public class NumAi5App extends Application {
     @Override
     public void onCreate() {
         super.onCreate();
+        // 老系统根证书库缺少新根（如 ISRG Root X1），先补上再发任何网络请求
+        io.github.numai5.api.TlsCompat.init(this);
         // 预热 LaTeX 渲染：字体首次加载较慢，放到后台线程，避免首条公式卡顿
         new Thread(() -> MathRenderer.warmUp(this)).start();
         final Thread.UncaughtExceptionHandler previous = Thread.getDefaultUncaughtExceptionHandler();

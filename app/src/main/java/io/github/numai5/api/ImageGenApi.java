@@ -47,11 +47,11 @@ public class ImageGenApi {
     /** 单次生图操作的 HTTP 请求预算（提交 + 字段回退 + 轮询） */
     private static final int IMAGE_REQUEST_BUDGET = 40;
 
-    private static final OkHttpClient CLIENT = new OkHttpClient.Builder()
+    private static final OkHttpClient CLIENT = TlsCompat.configure(new OkHttpClient.Builder()
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(300, TimeUnit.SECONDS)
             .writeTimeout(60, TimeUnit.SECONDS)
-            .retryOnConnectionFailure(true)
+            .retryOnConnectionFailure(true))
             .build();
 
     /** 生图结果：已保存到本地的文件名列表 + 服务端改写后的提示词（可选） */

@@ -29,11 +29,11 @@ public class ApiClient {
     private final OkHttpClient client;
 
     public ApiClient() {
-        this.client = new OkHttpClient.Builder()
+        this.client = TlsCompat.configure(new OkHttpClient.Builder()
                 .connectTimeout(12, TimeUnit.SECONDS)
                 .readTimeout(300, TimeUnit.SECONDS)
                 .writeTimeout(60, TimeUnit.SECONDS)
-                .retryOnConnectionFailure(true)
+                .retryOnConnectionFailure(true))
                 .build();
     }
 
