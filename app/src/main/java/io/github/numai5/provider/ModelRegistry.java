@@ -122,6 +122,11 @@ public final class ModelRegistry {
         r(rules, THINKING, "qwen", "3", "5");
         r(rules, THINKING, "qwen", "3", "vl");
         r(rules, THINKING, "gpt", "5", "4");
+        // 商汤日日新及其聚合模型
+        r(rules, THINKING, "sensenova", "6", "8");
+        r(rules, THINKING, "glm", "5", "2");
+        r(rules, THINKING, "kimi", "k", "3");
+        r(rules, THINKING, "deepseek", "flash");
 
         // —— 视觉能力 ——
         r(rules, VISION, "vision");
@@ -132,6 +137,11 @@ public final class ModelRegistry {
         r(rules, VISION, "gemini");
         r(rules, VISION, "qwen", "3", "vl");
         r(rules, VISION, "deepseek", "v", "4", "flash", "vision");
+        r(rules, VISION, "sensenova", "6", "8");
+        r(rules, VISION, "kimi", "k", "3");
+        // deepseek-flash（V4.1）支持图片输入，但 deepseek-v4-flash 不支持：用负向规则排除
+        rules.add(new Rule(new String[][]{{"deepseek", "flash"}},
+                new String[][]{{"v", "4"}}, VISION));
 
         // —— 不支持 function calling 的黑名单 ——
         r(rules, NO_TOOLS, "deepseek", "reasoner");
@@ -181,6 +191,8 @@ public final class ModelRegistry {
         r(rules, IMAGE_GEN, "文生图");
         r(rules, IMAGE_GEN, "绘图");
         r(rules, IMAGE_GEN, "画图");
+        // 商汤 U 系列（sensenova-u1.5-lite / fast）：生成与编辑一体的图片模型
+        r(rules, IMAGE_GEN, "sensenova", "u", "1");
 
         return rules;
     }

@@ -94,9 +94,17 @@ public class ModelCatalog {
             String id = stripPrefix(rawId);
             if (id.length() == 0) continue;
 
-            ModelDef m = new ModelDef(id, id, providerId, false, false);
+            // 部分站点（商汤日日新等）会返回更友好的 name 字段
+            String display = id;
+            if (obj.has("name") && !obj.get("name").isJsonNull()
+                    && obj.get("name").isJsonPrimitive()) {
+                String name = obj.get("name").getAsString();
+                if (name != null && name.trim().length() > 0) display = name.trim();
+            }
+            ModelDef m = new ModelDef(id, display, providerId, false, false);
             m.rawId = rawId;
             inferCapabilities(m, rawId);
+            applyModalities(m, obj);
             if (m.isThinking() && m.isVision()) m.displayName += " (🧠📷)";
             else if (m.isThinking()) m.displayName += " (🧠)";
             else if (m.isVision()) m.displayName += " (📷)";
@@ -108,6 +116,32 @@ public class ModelCatalog {
     /** 根据模型 id 推断能力开关（规则在 ModelRegistry，这里是兼容入口） */
     public void inferCapabilities(ModelDef m, String rawId) {
         ModelRegistry.applyTo(m, rawId);
+    }
+
+    /**
+     * 用 /models 返回的模态字段补充能力（商汤日日新等会返回
+     * input_modalities / output_modalities）。字段缺失时不影响本地规则推断。
+     */
+    private void applyModalities(ModelDef m, JsonObject obj) {
+        if (m == null || obj == null) return;
+        com.google.gson.JsonArray inputs = obj.getAsJsonArray("input_modalities");
+        if (inputs != null) {
+            for (int i = 0; i < inputs.size(); i++) {
+                if ("image".equalsIgnoreCase(inputs.get(i).getAsString())) {
+                    m.supportsVision = true;
+                    break;
+                }
+            }
+        }
+        com.google.gson.JsonArray outputs = obj.getAsJsonArray("output_modalities");
+        if (outputs != null) {
+            for (int i = 0; i < outputs.size(); i++) {
+                if ("image".equalsIgnoreCase(outputs.get(i).getAsString())) {
+                    m.supportsImageGen = true;
+                    break;
+                }
+            }
+        }
     }
 
     /** 汇总所有供应商中的绘图模型（手动标记优先） */

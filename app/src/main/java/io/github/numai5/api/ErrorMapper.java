@@ -131,7 +131,7 @@ public final class ErrorMapper {
     /** 按状态码、错误码与错误体给错误分类（无法可靠区分时返回 OTHER） */
     public static Kind classify(int httpCode, String code, String detail, String body) {
         String all = lower(join(code, detail, body));
-        if (isQuota(all) || httpCode == 402) return Kind.QUOTA;
+        if (isHardQuota(all) || httpCode == 402) return Kind.QUOTA;
         if (isAuth(all) || httpCode == 401) return Kind.AUTH;
         if (httpCode == 403) return Kind.PERMISSION;
         if (httpCode == 429) return Kind.RATE_LIMIT;
@@ -174,7 +174,7 @@ public final class ErrorMapper {
     private static String friendlyText(int httpCode, String code, String detail, String body) {
         String all = lower(join(code, detail, body));
 
-        if (isQuota(all)) {
+        if (isHardQuota(all) || httpCode == 402) {
             return withDetail("账号额度不足：该供应商账号的模型额度已用尽，请充值、改用其它模型，或换一个供应商", httpCode, code, detail);
         }
         if (isAuth(all)) {
@@ -227,6 +227,20 @@ public final class ErrorMapper {
             sb.append("\n原始信息：").append(safe(detail));
         }
         return sb.toString();
+    }
+
+    /**
+     * 明确的额度耗尽（区别于「429 限流里带 quota 字样」）。
+     *
+     * <p>商汤日日新的 429 是 quota_exceeded_error，但语义是「速率/额度超限，建议退避重试」，
+     * 属于可恢复的限流；只有 insufficient_quota / 余额不足这类才按额度耗尽暂停供应商。
+     */
+    private static boolean isHardQuota(String all) {
+        return all.contains("insufficientquota") || all.contains("insufficient_quota")
+                || all.contains("exceeded your current quota")
+                || all.contains("余额不足") || all.contains("billing")
+                || (all.contains("quota") && (all.contains("exhaust") || all.contains("用尽")))
+                || (all.contains("额度") && all.contains("用尽"));
     }
 
     private static boolean isQuota(String all) {

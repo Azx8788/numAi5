@@ -33,6 +33,8 @@ public class ConfigManager {
     private static final String KEY_IMAGEGEN_SIZE = "imagegenSize";
     /** 魔搭预设是否已补入（只补一次，避免用户删除后又被加回） */
     private static final String KEY_MODELSCOPE_PRESET = "modelscopePresetAdded";
+    /** 商汤日日新预设是否已补入（老配置升级时补一次） */
+    private static final String KEY_SENSENOVA_PRESET = "sensenovaPresetAdded";
     // 旧版字段（仅用于一次性迁移）
     private static final String KEY_OLD_BASE_URL = "baseUrl";
     private static final String KEY_OLD_API_KEY = "apiKey";
@@ -96,6 +98,17 @@ public class ConfigManager {
                 if ("p4".equals(preset.id)) {
                     c.providers.add(preset);
                     preferences.edit().putBoolean(KEY_MODELSCOPE_PRESET, true).apply();
+                    break;
+                }
+            }
+        }
+        // 老配置升级：补一次商汤日日新（同样只补一次，用户删掉后不再自动加回）
+        if (!preferences.getBoolean(KEY_SENSENOVA_PRESET, false)
+                && findProviderIn(c.providers, "p5") == null) {
+            for (Provider preset : PresetModels.createDefaultProviders()) {
+                if ("p5".equals(preset.id)) {
+                    c.providers.add(preset);
+                    preferences.edit().putBoolean(KEY_SENSENOVA_PRESET, true).apply();
                     break;
                 }
             }

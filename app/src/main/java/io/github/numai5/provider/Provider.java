@@ -22,6 +22,8 @@ public class Provider {
 
     public static final String TYPE_OPENAI = "openai";
     public static final String TYPE_MODELSCOPE = "modelscope";
+    /** 商汤日日新：对话 OpenAI 兼容；生图/图生图用 JSON 的 images 数组（不是 multipart） */
+    public static final String TYPE_SENSENOVA = "sensenova";
 
     /**
      * 客户端限流：同一供应商两次请求开始之间至少间隔的秒数。
@@ -47,6 +49,15 @@ public class Provider {
     /** 是否为魔搭（异步生图、errors 复数错误结构等差异按此判断） */
     public boolean isModelScope() {
         return TYPE_MODELSCOPE.equalsIgnoreCase(type);
+    }
+
+    /**
+     * 是否为商汤日日新（生图/编辑接口用 JSON images 数组，支持 watermark/prompt_extend）。
+     * 除了预设类型，也按官方域名兜底识别：用户手填 token.sensenova.cn 时同样走 JSON 编辑。
+     */
+    public boolean isSenseNova() {
+        return TYPE_SENSENOVA.equalsIgnoreCase(type)
+                || normalizedBaseUrl().contains("sensenova.cn");
     }
 
     /** 去掉地址末尾斜杠 */

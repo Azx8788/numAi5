@@ -170,8 +170,11 @@ public class ImageGenApi {
         }
 
         Budget budget = new Budget();
-        // 有参考图走编辑接口（images/edits multipart），无图走生成接口（images/generations JSON）
+        // 有参考图：商汤日日新用 JSON 的 images 数组，其余 OpenAI 兼容站用 multipart
         if (refImages != null && !refImages.isEmpty()) {
+            if (provider.isSenseNova()) {
+                return requestEditJson(context, provider, modelId, prompt, size, refImages, budget);
+            }
             return requestEdit(context, provider, modelId, prompt, size, n, refImages, budget);
         }
 
@@ -509,12 +512,20 @@ public class ImageGenApi {
         JsonObject body = new JsonObject();
         body.addProperty("model", modelId);
         body.addProperty("prompt", prompt);
-        body.addProperty("n", n > 1 ? n : 1);
-        if (size != null && size.length() > 0 && !"auto".equals(size)) {
-            body.addProperty("size", size);
+        // 商汤 U1.5 仅支持 n=1
+        body.addProperty("n", provider.isSenseNova() ? 1 : (n > 1 ? n : 1));
+        String normalizedSize = provider.isSenseNova() ? normalizeSenseNovaSize(size) : size;
+        if (normalizedSize != null && normalizedSize.length() > 0 && !"auto".equals(normalizedSize)) {
+            body.addProperty("size", normalizedSize);
         }
         if (withResponseFormat) {
             body.addProperty("response_format", "b64_json");
+        }
+        if (provider.isSenseNova()) {
+            // 官方参数：关闭 Logo 水印（公测期免费）、开启提示词润色、固定 PNG 输出
+            body.addProperty("watermark", false);
+            body.addProperty("prompt_extend", true);
+            body.addProperty("output_format", "png");
         }
 
         String url = provider.normalizedBaseUrl() + "/images/generations";
@@ -604,6 +615,112 @@ public class ImageGenApi {
             }
             throw e;
         }
+    }
+
+    /**
+     * 商汤日日新的图生图：POST /images/edits，**JSON** 而不是 multipart。
+     *
+     * 请求体形如：
+     * {"model":"sensenova-u1.5-lite","images":[{"image_url":"data:image/jpeg;base64,..."}],
+     *  "prompt":"...","n":1,"size":"auto","response_format":"b64_json",
+     *  "output_format":"png","watermark":false,"prompt_extend":true}
+     *
+     * 文档限制：至多 5 张参考图，第 1 张为主编辑图；n 只能为 1。
+     */
+    private static Outcome requestEditJson(Context context, Provider provider, String modelId,
+                                           String prompt, String size,
+                                           List<String> refImages, Budget budget) throws ApiError {
+        JsonArray images = new JsonArray();
+        for (String filename : refImages) {
+            if (images.size() >= 5) break; // 官方上限 5 张
+            File file = ImageCompressor.imageFile(context, filename);
+            if (file == null || !file.exists() || file.length() == 0) {
+                throw new ApiError("参考图读取失败，请重新选择", false, null);
+            }
+            String base64 = ImageCompressor.toBase64(file);
+            if (base64 == null || base64.length() == 0) {
+                throw new ApiError("参考图编码失败，请重新选择", false, null);
+            }
+            JsonObject item = new JsonObject();
+            item.addProperty("image_url", "data:image/jpeg;base64," + base64);
+            images.add(item);
+        }
+        if (images.size() == 0) {
+            throw new ApiError("参考图读取失败，请重新选择", false, null);
+        }
+
+        JsonObject body = new JsonObject();
+        body.addProperty("model", modelId);
+        body.add("images", images);
+        body.addProperty("prompt", prompt);
+        body.addProperty("n", 1);
+        String normalizedSize = normalizeSenseNovaSize(size);
+        if (normalizedSize != null && !"auto".equals(normalizedSize)) {
+            body.addProperty("size", normalizedSize);
+        }
+        body.addProperty("response_format", "b64_json");
+        body.addProperty("output_format", "png");
+        body.addProperty("watermark", false);
+        body.addProperty("prompt_extend", true);
+
+        String url = provider.normalizedBaseUrl() + "/images/edits";
+        Request.Builder requestBuilder = new Request.Builder()
+                .url(url)
+                .header("Authorization", "Bearer " + ApiAuth.sanitize(provider.apiKey))
+                .header("Content-Type", "application/json");
+        ApiCompatHeaders.apply(requestBuilder, url);
+        final Request request = requestBuilder
+                .post(RequestBody.create(body.toString(), JSON))
+                .build();
+
+        try {
+            return guarded(provider, budget, entry -> {
+                try (Response response = execute(entry, request)) {
+                    if (!response.isSuccessful()) {
+                        ResponseBody responseBody = response.body();
+                        String text = responseBody != null ? responseBody.string() : "";
+                        throw httpError(text, response.code(), response.header("Retry-After"));
+                    }
+                    return parseResponse(context, response);
+                }
+            });
+        } catch (ApiError e) {
+            if (e.isTimeout && e.httpCode == 0) {
+                throw new ApiError(context.getString(R.string.imagegen_timeout_billing), true, null);
+            }
+            throw e;
+        }
+    }
+
+    /**
+     * 商汤 U1.5 的尺寸约束：512~4096、必须为 32 的倍数、长宽比不超过 3:1。
+     * 用户选 256x256 这类过小尺寸时等比放大到 512；不合法则回退 auto（由服务端按主图适配）。
+     */
+    private static String normalizeSenseNovaSize(String size) {
+        if (size == null || size.length() == 0 || "auto".equalsIgnoreCase(size)) return "auto";
+        int sep = size.indexOf('x');
+        if (sep <= 0) return "auto";
+        int width;
+        int height;
+        try {
+            width = Integer.parseInt(size.substring(0, sep).trim());
+            height = Integer.parseInt(size.substring(sep + 1).trim());
+        } catch (NumberFormatException e) {
+            return "auto";
+        }
+        if (width <= 0 || height <= 0) return "auto";
+        // 长宽比超过 3:1 直接交给服务端 auto，避免裁剪
+        if (Math.max(width, height) > Math.min(width, height) * 3) return "auto";
+        width = clampSenseNovaSide(width);
+        height = clampSenseNovaSide(height);
+        return width + "x" + height;
+    }
+
+    private static int clampSenseNovaSide(int value) {
+        int v = Math.round(value / 32f) * 32;
+        if (v < 512) v = 512;
+        if (v > 4096) v = 4096;
+        return v;
     }
 
     private static Outcome parse(Context context, String text) throws ApiError {

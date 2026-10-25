@@ -110,6 +110,10 @@ public class OpenAiProtocol implements ProviderProtocol {
 
         if (d.has("reasoning_content") && !d.get("reasoning_content").isJsonNull()) {
             delta.reasoning = d.get("reasoning_content").getAsString();
+        } else if (d.has("reasoning") && !d.get("reasoning").isJsonNull()
+                && d.get("reasoning").isJsonPrimitive()) {
+            // 商汤日日新等用 reasoning 而不是 reasoning_content 返回思考增量
+            delta.reasoning = d.get("reasoning").getAsString();
         }
         if (d.has("content") && !d.get("content").isJsonNull()) {
             delta.content = d.get("content").getAsString();
