@@ -241,12 +241,24 @@ public class ConfigManager {
     }
 
     public void updateProvider(String id, String name, String baseUrl, String apiKey) {
+        updateProvider(id, name, baseUrl, apiKey, -1);
+    }
+
+    /**
+     * @param minIntervalSec 客户端限流间隔（秒），负数表示保持原值不变
+     */
+    public void updateProvider(String id, String name, String baseUrl, String apiKey,
+                               int minIntervalSec) {
         Provider p = findProvider(id);
         if (p == null) return;
         p.name = name == null ? "" : name.trim();
         p.baseUrl = baseUrl == null ? "" : baseUrl.trim();
         p.apiKey = apiKey == null ? "" : apiKey.trim();
+        if (minIntervalSec >= 0) p.minIntervalSec = minIntervalSec;
         save();
+        // 用户保存供应商设置 = 明确的恢复动作：清除限流冷却与「额度/认证」暂停，
+        // 否则修正 Key 或充值后仍需等定时器，属于不可验证的隐式恢复。
+        ProviderRateLimiter.resume(p);
     }
 
     /**

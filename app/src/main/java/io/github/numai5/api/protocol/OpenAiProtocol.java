@@ -51,7 +51,8 @@ public class OpenAiProtocol implements ProviderProtocol {
     public List<ModelDef> fetchModels(Provider provider) throws ApiError {
         String url = provider.normalizedBaseUrl() + "/models";
         ApiRequest request = new ApiRequest("/models", "GET")
-                .setCredentials(provider.normalizedBaseUrl(), provider.apiKey);
+                .setCredentials(provider.normalizedBaseUrl(), provider.apiKey)
+                .setProvider(provider);
         ApiResponse response = apiClient.execute(request);
         return parseModelsResponse(provider, response);
     }

@@ -2,7 +2,11 @@ package io.github.numai5.api;
 
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import java.text.ParsePosition;
+import java.text.SimpleDateFormat;
+import java.util.Date;
 import java.util.Locale;
+import java.util.TimeZone;
 
 /**
  * 把各家上游五花八门的错误响应，翻译成一句用户能看懂、并且知道下一步该做什么的话。
@@ -17,26 +21,138 @@ public final class ErrorMapper {
     /** 单条错误信息最大长度，避免把整段 HTML 塞进气泡 */
     private static final int MAX_MESSAGE = 300;
 
+    /**
+     * 错误大类。调度器据此决定「是否冷却」「是否暂停该供应商」，
+     * 不再把所有 429 / 所有 HTTP 错误当成同一种限流。
+     */
+    public enum Kind {
+        /** 速率限制（含并发超限）：本次失败 + 供应商冷却，不自动重发 */
+        RATE_LIMIT,
+        /** 余额不足 / 额度耗尽：暂停该供应商自动调度，等用户处理 */
+        QUOTA,
+        /** 认证失败（Key 无效、未授权）：暂停该供应商自动调度，等凭据修正 */
+        AUTH,
+        /** 权限不足：只影响本次请求，不暂停供应商 */
+        PERMISSION,
+        /** 参数 / 模型 / 上下文等请求本身的问题：不重试 */
+        PARAM,
+        /** 上游 5xx：不自动重试，但不停用供应商 */
+        SERVER,
+        /** 网络层失败：不自动重试 */
+        NETWORK,
+        /** 其他无法归类 */
+        OTHER
+    }
+
     private ErrorMapper() {
     }
 
     /** 把 HTTP 错误响应翻译成 ApiError（含是否可重试的判定） */
     public static ApiError fromHttp(int httpCode, String body) {
+        return fromHttp(httpCode, body, null);
+    }
+
+    /**
+     * 把 HTTP 错误响应翻译成 ApiError，并带上 Retry-After 解析结果与错误大类。
+     *
+     * @param retryAfterHeader 响应头 Retry-After 原值（整数秒或 HTTP 日期），可为 null
+     */
+    public static ApiError fromHttp(int httpCode, String body, String retryAfterHeader) {
         String code = extractCode(body);
         String detail = extractMessage(body);
         boolean retryable = isRetryable(httpCode, code, detail, body);
+        int retryAfter = parseRetryAfterSeconds(retryAfterHeader, System.currentTimeMillis());
+        if (retryAfter < 0) retryAfter = 0;
         // isTimeout 只表示「请求超时」，不能拿 5xx 顶替：UI 会据此提示「请检查网络」，
         // 而上游 500 是服务端故障，两者含义不同。
         return new ApiError(friendlyText(httpCode, code, detail, body), false,
-                body, httpCode, code, retryable, 0);
+                body, httpCode, code, retryable, retryAfter, classify(httpCode, code, detail, body));
     }
 
-    /** 网络层错误（超时、DNS、连接重置等）：默认视为可重试 */
+    /**
+     * 解析 Retry-After：兼容「整数秒」和三种 HTTP 日期格式。
+     *
+     * <p>HTTP 日期要先换算成相对当前时间的秒数，再交给单调时钟换算冷却期限，
+     * 避免设备时间不准直接导致冷却时长错乱。
+     *
+     * @return 等待秒数（向上取整，最小 0）；缺失或无法解析返回 -1
+     */
+    public static int parseRetryAfterSeconds(String value, long nowWallMs) {
+        if (value == null) return -1;
+        String raw = value.trim();
+        if (raw.length() == 0) return -1;
+
+        // 整数秒（绝大多数中转站）
+        boolean digits = true;
+        for (int i = 0; i < raw.length(); i++) {
+            char c = raw.charAt(i);
+            if (c < '0' || c > '9') {
+                digits = false;
+                break;
+            }
+        }
+        if (digits) {
+            try {
+                long seconds = Long.parseLong(raw);
+                if (seconds < 0) return -1;
+                return (int) Math.min(seconds, Integer.MAX_VALUE);
+            } catch (NumberFormatException e) {
+                return -1;
+            }
+        }
+
+        // HTTP-date（RFC 1123 / RFC 850 / asctime）
+        long target = parseHttpDate(raw);
+        if (target <= 0) return -1;
+        long diff = target - nowWallMs;
+        if (diff <= 0) return 0;
+        return (int) Math.min((diff + 999L) / 1000L, Integer.MAX_VALUE);
+    }
+
+    private static long parseHttpDate(String raw) {
+        String[] patterns = {
+                "EEE, dd MMM yyyy HH:mm:ss zzz",
+                "EEEE, dd-MMM-yy HH:mm:ss zzz",
+                "EEE MMM d HH:mm:ss yyyy"
+        };
+        for (String pattern : patterns) {
+            SimpleDateFormat format = new SimpleDateFormat(pattern, Locale.US);
+            format.setTimeZone(TimeZone.getTimeZone("GMT"));
+            format.setLenient(false);
+            ParsePosition position = new ParsePosition(0);
+            Date date = format.parse(raw, position);
+            if (date != null && position.getIndex() == raw.length()) {
+                return date.getTime();
+            }
+        }
+        return -1L;
+    }
+
+    /** 按状态码、错误码与错误体给错误分类（无法可靠区分时返回 OTHER） */
+    public static Kind classify(int httpCode, String code, String detail, String body) {
+        String all = lower(join(code, detail, body));
+        if (isQuota(all) || httpCode == 402) return Kind.QUOTA;
+        if (isAuth(all) || httpCode == 401) return Kind.AUTH;
+        if (httpCode == 403) return Kind.PERMISSION;
+        if (httpCode == 429) return Kind.RATE_LIMIT;
+        if (all.contains("concurrency limit") || all.contains("并发")
+                || all.contains("rate limit") || all.contains("too many requests")
+                || all.contains("overloaded")) {
+            return Kind.RATE_LIMIT;
+        }
+        if (isModelMissing(all) || isContextTooLong(all) || isContentFilter(all)) return Kind.PARAM;
+        if (httpCode >= 500 && httpCode != 501 && httpCode != 505) return Kind.SERVER;
+        if (httpCode >= 400) return Kind.PARAM;
+        if (httpCode == 0 && all.length() > 0) return Kind.OTHER;
+        return Kind.OTHER;
+    }
+
+    /** 网络层错误（超时、DNS、连接重置等）：默认视为可重试（本版本不会自动重发） */
     public static ApiError fromNetwork(String detail, boolean timeout) {
         String text = timeout
                 ? "请求超时：网络或中转站响应过慢，请稍后重试"
                 : "网络错误：" + safe(detail) + "，请检查网络后重试";
-        return new ApiError(text, timeout, null, 0, null, true, 0);
+        return new ApiError(text, timeout, null, 0, null, true, 0, Kind.NETWORK);
     }
 
     /** 是否值得自动重试：限频、服务端故障、超时可重试；额度/Key/模型不存在不可重试 */
@@ -84,16 +200,16 @@ public final class ErrorMapper {
             return withDetail("内容被上游安全策略拦截，请调整表述后重试", httpCode, code, detail);
         }
         if (all.contains("concurrency limit") || all.contains("并发")) {
-            return withDetail("上游并发超限：该账号同时进行的请求过多，稍后会自动重试", httpCode, code, detail);
+            return withDetail("上游并发超限：该账号同时进行的请求过多，已暂停发送，请稍后重试", httpCode, code, detail);
         }
         if (httpCode == 429) {
-            return withDetail("请求过于频繁：已被上游限流，稍后会自动重试", httpCode, code, detail);
+            return withDetail("请求过于频繁：已被上游限流，已按服务端要求暂停发送，请稍后重试", httpCode, code, detail);
         }
         if (httpCode == 402) {
             return withDetail("需要付费：该供应商账户余额不足", httpCode, code, detail);
         }
         if (httpCode >= 500) {
-            return withDetail("上游服务异常（HTTP " + httpCode + "），稍后会自动重试", httpCode, code, detail);
+            return withDetail("上游服务异常（HTTP " + httpCode + "），请稍后重试", httpCode, code, detail);
         }
         if (httpCode > 0) {
             return withDetail("请求失败（HTTP " + httpCode + "）", httpCode, code, detail);

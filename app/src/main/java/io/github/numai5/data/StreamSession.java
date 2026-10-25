@@ -28,6 +28,9 @@ public class StreamSession {
     private Chat activeChat;
     private Message activeMsg;
     private boolean generating;
+    /** 回合号：新回合/取消时递增，旧回合的回调据此丢弃，避免旧请求复活新一轮界面 */
+    private long roundSeq;
+    private long activeRound;
 
     private StreamSession(Context context) {
         this.apiService = new ApiService(context.getApplicationContext());
@@ -57,15 +60,19 @@ public class StreamSession {
         this.activeChat = chat;
         this.activeMsg = assistantMsg;
         this.generating = true;
+        final long round = ++roundSeq;
+        activeRound = round;
         apiService.chatCompletion(chat, userMessage, model, level, assistantMsg,
                 new ApiCallback<ApiService.ChatCompletionResult>() {
                     @Override
                     public void onSuccess(ApiService.ChatCompletionResult result) {
+                        if (round != activeRound) return; // 旧回合：已被新回合或取消取代
                         finish(chat, assistantMsg, result, null);
                     }
 
                     @Override
                     public void onError(ApiError error) {
+                        if (round != activeRound) return;
                         finish(chat, assistantMsg, null, error);
                     }
                 });
@@ -73,7 +80,14 @@ public class StreamSession {
 
     /** 取消进行中的请求（步骤12）；结束后仍会走 finish() 流程 */
     public void cancel() {
+        // 不递增回合号：本轮仍需正常走到 finish()，把已收内容标记为中断；
+        // 旧线程由 ApiService 自己的取消令牌与轮次号拦下，不会写入下一轮界面。
         apiService.cancel();
+    }
+
+    /** 当前排队名次：1 表示下一个；0 表示未排队 / 正在发送 */
+    public int queuePosition() {
+        return apiService.getChatQueuePosition();
     }
 
     /** 回合结束（主线程）：写回错误信息、保存历史，最后通知 UI 监听（若有） */

@@ -18,10 +18,12 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import io.github.numai5.data.ConfigManager;
 import io.github.numai5.data.ContextTrimmer;
 import io.github.numai5.data.MemoryStore;
 import io.github.numai5.data.MessageManager;
+import io.github.numai5.data.ProviderRateLimiter;
 import io.github.numai5.model.Chat;
 import io.github.numai5.model.Config;
 import io.github.numai5.model.Message;
@@ -45,13 +47,23 @@ import okhttp3.ResponseBody;
 /**
  * OpenAI 兼容 Chat Completions 服务。
  * 集中处理 buildMessages、SSE 流式、工具循环、400 自愈（A1）。
+ *
+ * 请求调度与取消（v1.4）：
+ * - 每轮对话有自己的取消令牌（CancelToken），不再用会被新请求重置的共享布尔量；
+ *   旧线程因令牌或轮次号过期而退出，不会写入新一轮界面状态。
+ * - 每次实际 HTTP 请求都经 ProviderRateLimiter（供应商级并发/间隔/RPM/冷却）。
+ * - 自动重试为 0：429、5xx 一律不重发；400 参数自愈与 max 降级受统一请求预算约束，
+ *   不再用递归调用各自重置计数器。
  */
 public class ApiService {
     private static final String TAG = "ApiService";
     private static final MediaType JSON = MediaType.get("application/json; charset=utf-8");
 
-    /** 限频 / 上游 5xx 的自动重试次数上限（指数退避） */
-    private static final int MAX_TRANSIENT_RETRIES = 2;
+    /**
+     * 单次用户操作的 HTTP 请求预算：首次请求 + 一次参数自愈 + 一次 max 降级。
+     * 递归已改为迭代，预算在循环里统一扣减，任何分支都不能突破。
+     */
+    private static final int CHAT_REQUEST_BUDGET = 3;
 
     /** 本会话内已确认不支持 max 的模型 id（步骤5）：之后 MAX 直接降级 high，不再发送 max */
     private static final Set<String> maxUnsupportedModels =
@@ -63,9 +75,15 @@ public class ApiService {
     private final Handler mainHandler;
     private final OkHttpClient sseClient;
 
-    /** 进行中的网络调用（步骤12 请求取消） */
-    private volatile Call activeCall;
-    private volatile boolean cancelled;
+    /** 当前轮次的取消令牌（每轮独立；取消即断开对应 OkHttp Call） */
+    private volatile CancelToken activeToken;
+    /** 当前轮次号：新轮次/取消时递增，旧线程据此判定自己已过期 */
+    private final AtomicLong generationSeq = new AtomicLong(0);
+    private volatile long activeGeneration = 0;
+    /** 当前聊天请求的调度条目（排队名次与取消用） */
+    private volatile ProviderRateLimiter.Entry chatEntry;
+    /** 当前聊天请求所属供应商（取消时只清该供应商的聊天队列） */
+    private volatile Provider activeProvider;
 
     public ApiService(Context context) {
         this.context = resolveAppContext(context);
@@ -96,28 +114,73 @@ public class ApiService {
         }
     }
 
+    /** 一轮对话的独立取消令牌；每轮新建，互不影响 */
+    public static final class CancelToken {
+        private volatile boolean cancelled;
+
+        public void cancel() {
+            cancelled = true;
+        }
+
+        public boolean isCancelled() {
+            return cancelled;
+        }
+    }
+
     /**
      * 发起一轮对话（步骤2：assistantMsg 由调用方创建并加入会话，便于 UI 轮询流式刷新）。
      * 回调统一切到主线程；中断时保留已收到的部分内容并标记 isError（B4）。
      */
     public void chatCompletion(Chat chat, Message currentUserMessage, ModelDef model, ThinkingLevel level,
                                Message assistantMsg, ApiCallback<ChatCompletionResult> callback) {
-        cancelled = false;
-        new Thread(() -> doChatCompletion(chat, currentUserMessage, model, level, assistantMsg, callback, 0, false)).start();
+        long generation = generationSeq.incrementAndGet();
+        activeGeneration = generation;
+        CancelToken token = new CancelToken();
+        activeToken = token;
+        new Thread(() -> doChatCompletion(generation, token, chat, currentUserMessage, model, level,
+                assistantMsg, callback)).start();
     }
 
-    /** 取消进行中的请求（步骤12）：当前调用立即断开，回合以「中断」结束并保留已收内容 */
+    /** 当前聊天请求的排队名次：1 表示下一个；0 表示未排队（执行中或已取消） */
+    public int getChatQueuePosition() {
+        return ProviderRateLimiter.positionOf(chatEntry);
+    }
+
+    /**
+     * 取消进行中的请求（步骤12）：当前调用立即断开，回合以「中断」结束并保留已收内容。
+     * 只影响聊天：清掉该供应商的聊天排队，生图/模型列表任务不受影响。
+     */
     public void cancel() {
-        cancelled = true;
-        Call call = activeCall;
-        if (call != null) {
-            call.cancel();
+        long generation = generationSeq.incrementAndGet();
+        activeGeneration = generation; // 让所有在途线程判定自己已过期
+        CancelToken token = activeToken;
+        if (token != null) {
+            token.cancel();
+        }
+        Provider provider = activeProvider;
+        if (provider != null) {
+            ProviderRateLimiter.cancelCategory(provider, ProviderRateLimiter.RequestType.CHAT);
+        }
+        ProviderRateLimiter.Entry entry = chatEntry;
+        if (entry != null) {
+            ProviderRateLimiter.cancel(entry); // 已绑定 Call 的会立即 cancel
         }
     }
 
-    private void doChatCompletion(Chat chat, Message currentUserMessage, ModelDef model, ThinkingLevel level,
-                                  Message assistantMsg, ApiCallback<ChatCompletionResult> callback,
-                                  int reasoningRetries, boolean maxRetryUsed) {
+    /** 取消该供应商正在等待的模型列表请求（设置页离开时调用），不影响聊天与生图 */
+    public void cancelModels(Provider provider) {
+        if (provider == null) return;
+        ProviderRateLimiter.cancelCategory(provider, ProviderRateLimiter.RequestType.MODEL_LIST);
+    }
+
+    /** 该线程是否仍然有效：未被取消，且没有被更新的一轮取代 */
+    private boolean isActive(long generation, CancelToken token) {
+        return token != null && !token.isCancelled() && generation == activeGeneration;
+    }
+
+    private void doChatCompletion(long generation, CancelToken token, Chat chat, Message currentUserMessage,
+                                  ModelDef model, ThinkingLevel level, Message assistantMsg,
+                                  ApiCallback<ChatCompletionResult> callback) {
         Config config = configManager.getConfig();
         // 用 uid 定位供应商：同名模型可能出现在多个中转站，只按模型名会串到别家
         Provider provider = ModelCatalog.getInstance().findProviderOfModel(model.uid());
@@ -129,16 +192,19 @@ public class ApiService {
             postError(callback, new ApiError("供应商「" + provider.displayName() + "」未配置中转地址或 Key"));
             return;
         }
+        activeProvider = provider;
         ProviderProtocol protocol = Protocols.of(provider, apiClient); // 发送/接收协议差异都从这里走
         String modelId = model.requestId(); // 步骤8：优先使用 /models 返回的原始 id
 
-        if (cancelled) {
+        if (!isActive(generation, token)) {
             handleCancelled(assistantMsg, callback);
             return;
         }
 
-        boolean retriedTransient = false;
-        int transientRetries = 0;
+        // 聊天历史 + 记忆注入只构建一次；每次 HTTP 请求只是重新组装 payload
+        List<Message> history;
+        boolean trimmed;
+        String effort;
         try {
             // 排除本轮占位的 assistant 消息，避免把空回复发进请求历史
             List<Message> source = new ArrayList<>();
@@ -156,8 +222,8 @@ public class ApiService {
             String sysPrompt = config.systemPrompt != null ? config.systemPrompt.trim() : "";
             int reserve = sysPrompt.length() + memoryText.length() + 200;
             int maxChars = Math.max(4000, ContextTrimmer.DEFAULT_MAX_CHARS - reserve);
-            List<Message> history = new ArrayList<>();
-            boolean trimmed = ContextTrimmer.trim(source, history,
+            history = new ArrayList<>();
+            trimmed = ContextTrimmer.trim(source, history,
                     ContextTrimmer.DEFAULT_MAX_ROUNDS, maxChars);
             if (currentUserMessage != null && !history.contains(currentUserMessage)) {
                 history.add(currentUserMessage); // 容错：调用方未把当前消息并入历史时兜底
@@ -174,176 +240,182 @@ public class ApiService {
             } else if (memoryText.length() > 0) {
                 history.add(0, MessageManager.createSystemMessage(memoryText));
             }
+            effort = resolveEffort(model, level, config);
+        } catch (Exception e) {
+            postError(callback, new ApiError(e.getMessage()));
+            return;
+        }
 
-            JsonArray messages = buildMessages(model, history, currentUserMessage);
+        int sent = 0;                  // 已发送的 HTTP 请求数（统一预算）
+        boolean selfHealed = false;    // reasoning_content 参数自愈是否已用
+        boolean maxDowngraded = false; // max 降级是否已用
+        String notice = null;
+        String chatUrl = protocol.chatUrl(provider);
+        OkHttpClient client = sseClient.newBuilder()
+                .readTimeout(300, TimeUnit.SECONDS)
+                .build();
 
-            JsonObject payload = new JsonObject();
-            payload.addProperty("model", modelId);
-            payload.add("messages", messages);
-            payload.addProperty("stream", true);
+        while (true) {
+            if (!isActive(generation, token)) {
+                handleCancelled(assistantMsg, callback);
+                return;
+            }
+            if (sent >= CHAT_REQUEST_BUDGET) {
+                postError(callback, new ApiError("本次请求已达到发送上限（" + CHAT_REQUEST_BUDGET
+                        + " 次），请稍后重试或更换模型"));
+                return;
+            }
+            sent++;
 
-            // 思考等级（步骤5）：方言开关从配置读取（默认 NewAPI 方言）
-            String effort = null;
-            if (model.isThinking()) {
-                effort = ThinkingMapper.apply(level, config.newapiDialect ? "newapi" : "standard");
-                if (effort != null) {
-                    if ("max".equals(effort) && maxUnsupportedModels.contains(model.id)) {
-                        effort = "high"; // 本会话内已知该模型不支持 max，直接降级
+            Request request;
+            try {
+                JsonObject payload = buildPayload(model, history, currentUserMessage, config, effort, modelId);
+                Request.Builder requestBuilder = new Request.Builder().url(chatUrl);
+                protocol.applyHeaders(requestBuilder, provider, chatUrl);
+                request = requestBuilder
+                        .post(RequestBody.create(payload.toString(), JSON))
+                        .build();
+            } catch (Exception e) {
+                postError(callback, new ApiError(e.getMessage()));
+                return;
+            }
+
+            ProviderRateLimiter.Entry entry = ProviderRateLimiter.submit(
+                    provider, ProviderRateLimiter.RequestType.CHAT);
+            chatEntry = entry;
+            ProviderRateLimiter.Denial denial = ProviderRateLimiter.awaitTurn(entry);
+            if (denial != null) {
+                postError(callback, RateLimitPolicy.denialError(denial));
+                return;
+            }
+            // 获准后、发送前：被取消则不发送，并按终态释放并发许可
+            if (!isActive(generation, token) || !ProviderRateLimiter.markRunning(entry)) {
+                ProviderRateLimiter.finish(entry, ProviderRateLimiter.State.CANCELLED, null);
+                handleCancelled(assistantMsg, callback);
+                return;
+            }
+
+            Call call = client.newCall(request);
+            ProviderRateLimiter.bind(entry, call::cancel);
+            ProviderRateLimiter.State terminal = ProviderRateLimiter.State.FAILED;
+            try (Response response = call.execute()) {
+                if (!response.isSuccessful()) {
+                    String errBody = response.body() != null ? response.body().string() : "";
+                    String errLower = errBody.toLowerCase(Locale.ROOT);
+                    ApiError mapped = ErrorMapper.fromHttp(response.code(), errBody,
+                            response.header("Retry-After"));
+                    // 先按类别更新供应商调度状态：429 冷却、额度/认证暂停，均不重发本请求
+                    RateLimitPolicy.report(provider, mapped);
+
+                    if (response.code() == 400 && !selfHealed && sent < CHAT_REQUEST_BUDGET
+                            && errLower.contains("reasoning_content")) {
+                        // A1 400 自愈：含 reasoning_content 错误则翻转开关重发（占同一预算）
+                        model.keepReasoningInHistory = !model.keepReasoningInHistory;
+                        selfHealed = true;
+                        continue;
                     }
-                    payload.addProperty("reasoning_effort", effort);
+                    if (response.code() == 400 && !maxDowngraded && "max".equals(effort)
+                            && sent < CHAT_REQUEST_BUDGET
+                            && (errLower.contains("reasoning_effort") || errLower.contains("max"))) {
+                        // 步骤5：中转不支持 max 时降级为 high（占同一预算），并记住该模型
+                        maxUnsupportedModels.add(model.id);
+                        effort = "high";
+                        maxDowngraded = true;
+                        notice = "中转站不支持 max 等级，已降级为 high";
+                        continue;
+                    }
+                    throw mapped;
                 }
-            }
 
-            // 步骤6：第一版不发送 max_tokens / max_completion_tokens，使用服务端默认额度
-            // 推理模型不接受 temperature（A4）
-            if (!model.isReasoningOnly) {
-                payload.addProperty("temperature", 0.7);
-            }
-
-            // 工具：仅当前模型支持，且当前消息不含图片（numAi 经验；第一版默认不开启）
-            boolean hasImages = currentUserMessage != null
-                    && currentUserMessage.inputImages != null && !currentUserMessage.inputImages.isEmpty();
-            if (model.supportsTools && !hasImages && (config.webSearchEnabled || config.webFetchEnabled)) {
-                JsonArray tools = buildTools(config);
-                if (tools.size() > 0) {
-                    payload.add("tools", tools);
-                    payload.addProperty("tool_choice", "auto");
+                ResponseBody bodyStream = response.body();
+                if (bodyStream == null) {
+                    throw new ApiError("Empty response body");
                 }
-            }
 
-            String chatUrl = protocol.chatUrl(provider);
-            Request.Builder requestBuilder = new Request.Builder().url(chatUrl);
-            protocol.applyHeaders(requestBuilder, provider, chatUrl);
-            Request request = requestBuilder
-                    .post(RequestBody.create(payload.toString(), JSON))
-                    .build();
-            OkHttpClient client = sseClient.newBuilder()
-                    .readTimeout(300, TimeUnit.SECONDS)
-                    .build();
+                ChatCompletionResult result = new ChatCompletionResult(assistantMsg);
+                result.trimmed = trimmed;
+                if (notice != null) {
+                    result.notice = notice;
+                }
+                parseStream(bodyStream.source(), assistantMsg, model, result, protocol);
+                terminal = ProviderRateLimiter.State.COMPLETED;
 
-            while (true) {
-                if (cancelled) {
+                if (result.interrupted) {
+                    if (isEmpty(assistantMsg.content, assistantMsg.reasoningRaw)) {
+                        throw new ApiError("生成中断：连接提前关闭");
+                    }
+                    assistantMsg.setAsError(); // B4：保留已收到部分并标记中断
+                }
+                postSuccess(callback, result);
+                return;
+            } catch (ApiError e) {
+                // 已知的 HTTP 错误（含 429/额度/认证）：不重发，直接结束本轮
+                finishChatFailure(assistantMsg, callback, e, token, generation);
+                return;
+            } catch (IOException e) {
+                if (!isActive(generation, token)) {
                     handleCancelled(assistantMsg, callback);
                     return;
                 }
-                activeCall = client.newCall(request);
-                try (Response response = activeCall.execute()) {
-                    if (!response.isSuccessful()) {
-                        String errBody = response.body() != null ? response.body().string() : "";
-                        String errLower = errBody.toLowerCase(Locale.ROOT);
-                        if (response.code() == 400) {
-                            // A1 400 自愈：含 reasoning_content 错误则翻转开关重试一次
-                            if (!cancelled && reasoningRetries == 0 && errLower.contains("reasoning_content")) {
-                                model.keepReasoningInHistory = !model.keepReasoningInHistory;
-                                doChatCompletion(chat, currentUserMessage, model, level, assistantMsg, callback,
-                                        reasoningRetries + 1, maxRetryUsed);
-                                return;
-                            }
-                            // 步骤5：中转不支持 max 时降级为 high 重试一次，并记住该模型
-                            if (!cancelled && !maxRetryUsed && "max".equals(effort)
-                                    && (errLower.contains("reasoning_effort") || errLower.contains("max"))) {
-                                maxUnsupportedModels.add(model.id);
-                                doChatCompletion(chat, currentUserMessage, model, level, assistantMsg, callback,
-                                        reasoningRetries, true);
-                                return;
-                            }
-                        }
-                        ApiError mapped = ErrorMapper.fromHttp(response.code(), errBody);
-                        // 限频 / 上游 5xx 自动退避重试；额度不足、Key 无效等不可恢复错误立即失败。
-                        // 已有输出内容时不重试，否则会重复生成。
-                        if (mapped.retryable && transientRetries < MAX_TRANSIENT_RETRIES
-                                && isEmpty(assistantMsg.content, assistantMsg.reasoningRaw)) {
-                            transientRetries++;
-                            retriedTransient = true;
-                            if (!sleepForRetry(transientRetries)) {
-                                handleCancelled(assistantMsg, callback);
-                                return;
-                            }
-                            continue;
-                        }
-                        throw mapped;
-                    }
-
-                    ResponseBody bodyStream = response.body();
-                    if (bodyStream == null) {
-                        throw new ApiError("Empty response body");
-                    }
-
-                    ChatCompletionResult result = new ChatCompletionResult(assistantMsg);
-                    result.trimmed = trimmed;
-                    if (maxRetryUsed) {
-                        result.notice = "中转站不支持 max 等级，已降级为 high";
-                    }
-                    if (retriedTransient) {
-                        result.notice = "网络波动，已自动重试后成功";
-                    }
-                    parseStream(bodyStream.source(), assistantMsg, model, result, protocol);
-
-                    if (result.interrupted) {
-                        if (isEmpty(assistantMsg.content, assistantMsg.reasoningRaw)) {
-                            throw new ApiError("生成中断：连接提前关闭");
-                        }
-                        assistantMsg.setAsError(); // B4：保留已收到部分并标记中断
-                    }
-                    postSuccess(callback, result);
-                    return;
-                } finally {
-                    activeCall = null;
-                }
-            }
-
-        } catch (ApiError e) {
-            if (cancelled) {
-                handleCancelled(assistantMsg, callback);
+                boolean timeout = e instanceof java.net.SocketTimeoutException;
+                finishChatFailure(assistantMsg, callback,
+                        ErrorMapper.fromNetwork(e.getMessage(), timeout), token, generation);
                 return;
-            }
-            // B4 断流：保留已收到的部分内容并标记错误
-            if (assistantMsg != null && !isEmpty(assistantMsg.content, assistantMsg.reasoningRaw)) {
-                assistantMsg.setAsError();
-                postSuccess(callback, new ChatCompletionResult(assistantMsg));
-            } else {
-                postError(callback, e);
-            }
-        } catch (java.net.SocketTimeoutException e) {
-            handleFailure(assistantMsg, callback, ErrorMapper.fromNetwork(e.getMessage(), true));
-        } catch (java.io.IOException e) {
-            handleFailure(assistantMsg, callback, ErrorMapper.fromNetwork(e.getMessage(), false));
-        } catch (Exception e) {
-            if (cancelled) {
-                handleCancelled(assistantMsg, callback);
-                return;
-            }
-            if (assistantMsg != null && !isEmpty(assistantMsg.content, assistantMsg.reasoningRaw)) {
-                assistantMsg.setAsError();
-                postSuccess(callback, new ChatCompletionResult(assistantMsg));
-            } else {
-                postError(callback, new ApiError(e.getMessage()));
+            } finally {
+                ProviderRateLimiter.finish(entry, terminal, null); // 幂等，确保并发许可只释放一次
+                if (chatEntry == entry) chatEntry = null;
             }
         }
     }
 
-    /**
-     * 自动重试前的等待（指数退避：2s、6s）。
-     * 返回 false 表示等待期间用户取消了请求，调用方应直接收尾。
-     */
-    private boolean sleepForRetry(int attempt) {
-        long waitMs = attempt <= 1 ? 2000L : 6000L;
-        long deadline = System.currentTimeMillis() + waitMs;
-        while (System.currentTimeMillis() < deadline) {
-            if (cancelled) return false;
-            try {
-                Thread.sleep(100);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                return false;
-            }
+    /** 依据模型与思考等级算出 reasoning_effort 的值（可能为 null） */
+    private String resolveEffort(ModelDef model, ThinkingLevel level, Config config) {
+        if (!model.isThinking()) return null;
+        // 思考等级（步骤5）：方言开关从配置读取（默认 NewAPI 方言）
+        String effort = ThinkingMapper.apply(level, config.newapiDialect ? "newapi" : "standard");
+        if ("max".equals(effort) && maxUnsupportedModels.contains(model.id)) {
+            return "high"; // 本会话内已知该模型不支持 max，直接降级
         }
-        return !cancelled;
+        return effort;
     }
 
-    /** 网络层失败收尾：已有输出则保留内容并标记中断，否则抛出映射后的错误 */
-    private void handleFailure(Message assistantMsg, ApiCallback<ChatCompletionResult> callback, ApiError error) {
-        if (cancelled) {
+    /** 组装一次 Chat Completions 请求体（不含重试状态，便于循环内复用） */
+    private JsonObject buildPayload(ModelDef model, List<Message> history, Message currentUserMessage,
+                                    Config config, String effort, String modelId) {
+        JsonArray messages = buildMessages(model, history, currentUserMessage);
+
+        JsonObject payload = new JsonObject();
+        payload.addProperty("model", modelId);
+        payload.add("messages", messages);
+        payload.addProperty("stream", true);
+
+        if (effort != null) {
+            payload.addProperty("reasoning_effort", effort);
+        }
+
+        // 步骤6：第一版不发送 max_tokens / max_completion_tokens，使用服务端默认额度
+        // 推理模型不接受 temperature（A4）
+        if (!model.isReasoningOnly) {
+            payload.addProperty("temperature", 0.7);
+        }
+
+        // 工具：仅当前模型支持，且当前消息不含图片（numAi 经验；第一版默认不开启）
+        boolean hasImages = currentUserMessage != null
+                && currentUserMessage.inputImages != null && !currentUserMessage.inputImages.isEmpty();
+        if (model.supportsTools && !hasImages && (config.webSearchEnabled || config.webFetchEnabled)) {
+            JsonArray tools = buildTools(config);
+            if (tools.size() > 0) {
+                payload.add("tools", tools);
+                payload.addProperty("tool_choice", "auto");
+            }
+        }
+        return payload;
+    }
+
+    /** 本轮失败收尾：已有输出则保留内容并标记中断，否则抛出映射后的错误 */
+    private void finishChatFailure(Message assistantMsg, ApiCallback<ChatCompletionResult> callback,
+                                   ApiError error, CancelToken token, long generation) {
+        if (!isActive(generation, token)) {
             handleCancelled(assistantMsg, callback);
             return;
         }
@@ -423,17 +495,15 @@ public class ApiService {
                 textPart.addProperty("text", m.content != null ? m.content : "");
                 content.add(textPart);
 
-                if (isCurrent) {
-                    for (String imageName : m.inputImages) {
-                        String base64 = loadImageBase64(imageName);
-                        if (base64 != null) {
-                            JsonObject imagePart = new JsonObject();
-                            imagePart.addProperty("type", "image_url");
-                            JsonObject imageUrl = new JsonObject();
-                            imageUrl.addProperty("url", "data:image/jpeg;base64," + base64);
-                            imagePart.add("image_url", imageUrl);
-                            content.add(imagePart);
-                        }
+                for (String imageName : m.inputImages) {
+                    String base64 = loadImageBase64(imageName);
+                    if (base64 != null) {
+                        JsonObject imagePart = new JsonObject();
+                        imagePart.addProperty("type", "image_url");
+                        JsonObject imageUrl = new JsonObject();
+                        imageUrl.addProperty("url", "data:image/jpeg;base64," + base64);
+                        imagePart.add("image_url", imageUrl);
+                        content.add(imagePart);
                     }
                 }
                 messageJson.add("content", content);
@@ -535,7 +605,6 @@ public class ApiService {
         return tools;
     }
 
-    /** 提取流式 chunk 中的 error 对象信息（步骤4） */
     /** SSE 流式解析（步骤4：处理 [DONE] / finish_reason / 流中 error 对象，标记截断与中断） */
     private void parseStream(okio.BufferedSource source, Message assistantMsg, ModelDef model,
                              ChatCompletionResult result, ProviderProtocol protocol)

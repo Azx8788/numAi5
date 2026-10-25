@@ -213,6 +213,20 @@
     <string name="imagegen_ref_compressed">参考图压缩为 1080px JPEG 后上传，单图 image、多图 image[] 字段。</string>
     <string name="imagegen_oom">图片过大，内存不足，请降低尺寸后重试</string>
     <string name="imagegen_timeout_billing">请求超时。服务端可能已出图并计费，请查看中转站记录后再决定是否重试</string>
+    <string name="provider_min_interval_hint">请求最小间隔（秒）</string>
+    <string name="provider_min_interval_desc">同一供应商同时只发一个请求，默认间隔 5 秒、每分钟最多 6 次；填 0 使用默认 5 秒。被中转站限流时按提示调整。生图与魔搭轮询同样按此限速。</string>
+    <string name="provider_min_interval_info">限流间隔 %1$d 秒</string>
+    <string name="rate_limited_wait">已按限流设置排队，稍候发送</string>
+    <string name="provider_rate_idle">空闲</string>
+    <string name="provider_rate_running">发送中</string>
+    <string name="provider_rate_queued">排队 %1$d</string>
+    <string name="provider_rate_cooldown">冷却 %1$d 秒</string>
+    <string name="provider_rate_paused_quota">已暂停（额度不足）</string>
+    <string name="provider_rate_paused_auth">已暂停（认证失败）</string>
+    <string name="provider_rate_resume_hint">保存该供应商设置（地址或 Key）会恢复调度并清除冷却</string>
+    <string name="imagegen_cancel">取消生图</string>
+    <string name="imagegen_cancel_confirm">取消本次生图请求？已排队和正在执行的生图任务都会停止，聊天不受影响。</string>
+    <string name="imagegen_cancel_requested">已取消生图请求</string>
     <string-array name="imagegen_sizes">
         <item>1024x1024</item>
         <item>1024x1792</item>

@@ -36,13 +36,17 @@ public class ModelScopeProtocol extends OpenAiProtocol {
         try {
             response = apiClient.execute(new ApiRequest("/models", "POST")
                     .setCredentials(provider.normalizedBaseUrl(), provider.apiKey)
+                    .setProvider(provider)
                     .setBody("{}"));
         } catch (ApiError e) {
-            // 个别部署可能只支持 GET：明确是方法不支持时回退
+            // 个别部署可能只支持 GET：明确是方法不支持时回退（回退请求同样占一次供应商额度）
             String msg = e.raw != null ? e.raw.toLowerCase(java.util.Locale.ROOT) : "";
-            if (msg.contains("405") || msg.contains("404") || msg.contains("method not allowed")) {
+            if (e.httpCode == 404 || e.httpCode == 405
+                    || msg.contains("405") || msg.contains("404")
+                    || msg.contains("method not allowed")) {
                 response = apiClient.execute(new ApiRequest("/models", "GET")
-                        .setCredentials(provider.normalizedBaseUrl(), provider.apiKey));
+                        .setCredentials(provider.normalizedBaseUrl(), provider.apiKey)
+                        .setProvider(provider));
             } else {
                 throw e;
             }

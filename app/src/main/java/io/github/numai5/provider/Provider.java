@@ -23,6 +23,13 @@ public class Provider {
     public static final String TYPE_OPENAI = "openai";
     public static final String TYPE_MODELSCOPE = "modelscope";
 
+    /**
+     * 客户端限流：同一供应商两次请求开始之间至少间隔的秒数。
+     * 0 表示只串行（同时只发一个请求），不额外等待。
+     * 中转站按并发或频率限速时报 429 时调大这个值。
+     */
+    public int minIntervalSec = 0;
+
     public Provider() {
     }
 
@@ -47,6 +54,13 @@ public class Provider {
         String url = baseUrl == null ? "" : baseUrl.trim();
         while (url.endsWith("/")) url = url.substring(0, url.length() - 1);
         return url;
+    }
+
+    /** 客户端限流使用的键：优先 id，其次地址 */
+    public String rateKey() {
+        if (id != null && id.length() > 0) return id;
+        String url = normalizedBaseUrl();
+        return url.length() > 0 ? url : "default";
     }
 
     /** 列表/按钮展示用名称 */

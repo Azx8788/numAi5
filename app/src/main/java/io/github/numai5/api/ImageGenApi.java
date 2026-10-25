@@ -18,8 +18,10 @@ import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.TimeUnit;
 import io.github.numai5.R;
+import io.github.numai5.data.ProviderRateLimiter;
 import io.github.numai5.provider.Provider;
 import io.github.numai5.vision.ImageCompressor;
+import okhttp3.Call;
 import okhttp3.MediaType;
 import okhttp3.MultipartBody;
 import okhttp3.OkHttpClient;
@@ -32,10 +34,18 @@ import okhttp3.ResponseBody;
  * 生图接口（OpenAI 兼容 /images/generations）。
  * 返回的图片可能是 b64_json 或 url，两种都支持；落盘为 filesDir/images/gen_*.png。
  * 生图耗时较长，读超时放宽到 300s。
+ *
+ * 限流（v1.4）：每次实际 HTTP 请求（提交、字段回退、每次轮询）都单独经
+ * ProviderRateLimiter 申请一次供应商额度，等待期间不占并发许可；
+ * 429 不再被静默吞掉并继续轮询，而是按服务端 Retry-After 结束本次操作并冷却供应商。
+ * CDN 图片下载不占供应商额度。
  */
 public class ImageGenApi {
     private static final String TAG = "ImageGenApi";
     private static final MediaType JSON = MediaType.get("application/json; charset=utf-8");
+
+    /** 单次生图操作的 HTTP 请求预算（提交 + 字段回退 + 轮询） */
+    private static final int IMAGE_REQUEST_BUDGET = 40;
 
     private static final OkHttpClient CLIENT = new OkHttpClient.Builder()
             .connectTimeout(30, TimeUnit.SECONDS)
@@ -48,6 +58,87 @@ public class ImageGenApi {
     public static class Outcome {
         public final List<String> filenames = new ArrayList<>();
         public String revisedPrompt;
+    }
+
+    /** 单次生图操作的请求预算：提交、字段回退、每次轮询都从这里扣一次 */
+    private static final class Budget {
+        private int remaining = IMAGE_REQUEST_BUDGET;
+
+        synchronized boolean take() {
+            if (remaining <= 0) return false;
+            remaining--;
+            return true;
+        }
+
+        synchronized int remaining() {
+            return remaining;
+        }
+    }
+
+    private interface GuardedCall<T> {
+        T run(ProviderRateLimiter.Entry entry) throws ApiError, IOException;
+    }
+
+    /**
+     * 在供应商调度器内执行一次 HTTP 请求：排队 → 获准 → 执行 → 释放（只释放一次）。
+     * 失败时把错误分类交给 RateLimitPolicy（429 冷却、额度/认证暂停）。
+     */
+    private static <T> T guarded(Provider provider, Budget budget,
+                                 GuardedCall<T> body) throws ApiError {
+        if (budget != null && !budget.take()) {
+            throw new ApiError("本次生图已达到请求次数上限（" + IMAGE_REQUEST_BUDGET
+                    + " 次），请稍后重试", true, null);
+        }
+        ProviderRateLimiter.Entry entry = ProviderRateLimiter.submit(
+                provider, ProviderRateLimiter.RequestType.IMAGE,
+                ProviderRateLimiter.Defaults.IMAGE_WAIT_MS);
+        ProviderRateLimiter.Denial denial = ProviderRateLimiter.awaitTurn(entry);
+        if (denial != null) {
+            throw RateLimitPolicy.denialError(denial);
+        }
+        if (!ProviderRateLimiter.markRunning(entry)) {
+            ProviderRateLimiter.finish(entry, ProviderRateLimiter.State.CANCELLED, null);
+            throw new ApiError("生图请求已取消", false, null);
+        }
+        ProviderRateLimiter.State terminal = ProviderRateLimiter.State.FAILED;
+        try {
+            T value = body.run(entry);
+            terminal = ProviderRateLimiter.State.COMPLETED;
+            return value;
+        } catch (ApiError e) {
+            RateLimitPolicy.report(provider, e);
+            throw e;
+        } catch (IOException e) {
+            // 被取消时 OkHttp 抛 "Canceled"：转成明确的取消提示，而不是当成网络错误
+            if (entry.isCancelRequested()) {
+                throw new ApiError("生图请求已取消", false, null);
+            }
+            boolean timeout = e instanceof java.net.SocketTimeoutException;
+            throw new ApiError("生图网络错误：" + e.getMessage(), timeout, null);
+        } finally {
+            ProviderRateLimiter.finish(entry, terminal, null);
+        }
+    }
+
+    /** 绑定调度条目并发起调用，使取消能真正断开连接 */
+    private static Response execute(ProviderRateLimiter.Entry entry, Request request) throws IOException {
+        Call call = CLIENT.newCall(request);
+        ProviderRateLimiter.bind(entry, call::cancel);
+        return call.execute();
+    }
+
+    /** 在原始错误提示后追加一句排障建议，保留原有分类信息 */
+    private static ApiError withHint(ApiError base, String hint) {
+        if (base == null) return new ApiError(hint);
+        String message = base.getMessage() == null ? hint : base.getMessage() + "\n" + hint;
+        return new ApiError(message, base.isTimeout, base.raw, base.httpCode, base.errorCode,
+                base.retryable, base.retryAfterSeconds, base.kind);
+    }
+
+    /** 上游 HTTP 失败 → 带分类的 ApiError（Retry-After 交给调度器做冷却） */
+    private static ApiError httpError(String text, int code, String retryAfterHeader) {
+        ApiError mapped = ErrorMapper.fromHttp(code, text, retryAfterHeader);
+        return mapped;
     }
 
     /**
@@ -75,24 +166,27 @@ public class ImageGenApi {
 
         // 魔搭是异步任务制：提交拿 task_id，再轮询任务状态取图
         if (provider.isModelScope()) {
-            return generateModelScope(context, provider, modelId, prompt, size, refImages);
+            return generateModelScope(context, provider, modelId, prompt, size, refImages, new Budget());
         }
 
+        Budget budget = new Budget();
         // 有参考图走编辑接口（images/edits multipart），无图走生成接口（images/generations JSON）
         if (refImages != null && !refImages.isEmpty()) {
-            return requestEdit(context, provider, modelId, prompt, size, n, refImages);
+            return requestEdit(context, provider, modelId, prompt, size, n, refImages, budget);
         }
 
         try {
-            return requestOnce(context, provider, modelId, prompt, size, n, true);
+            return requestOnce(context, provider, modelId, prompt, size, n, true, budget);
         } catch (ApiError e) {
+            // 只有明确是这个字段不被接受、且预算还够时，才做一次受控修正请求
             String raw = e.raw != null ? e.raw.toLowerCase() : "";
-            if (raw.contains("response_format") || (e.getMessage() != null
-                    && e.getMessage().toLowerCase().contains("response_format"))) {
-                // 该模型不接受 response_format，去掉后重试
-                return requestOnce(context, provider, modelId, prompt, size, n, false);
+            String message = e.getMessage() != null ? e.getMessage().toLowerCase() : "";
+            boolean fieldRejected = raw.contains("response_format") || message.contains("response_format");
+            if (!fieldRejected || e.kind == ErrorMapper.Kind.RATE_LIMIT
+                    || e.kind == ErrorMapper.Kind.QUOTA || e.kind == ErrorMapper.Kind.AUTH) {
+                throw e;
             }
-            throw e;
+            return requestOnce(context, provider, modelId, prompt, size, n, false, budget);
         }
     }
 
@@ -111,8 +205,8 @@ public class ImageGenApi {
      * @param modelId 必须是带 org 的完整模型 id（如 Qwen/Qwen-Image）
      */
     private static Outcome generateModelScope(Context context, Provider provider, String modelId,
-                                              String prompt, String size, List<String> refImages)
-            throws ApiError {
+                                              String prompt, String size, List<String> refImages,
+                                              Budget budget) throws ApiError {
         String base = provider.normalizedBaseUrl();
         List<JsonObject> attempts = buildModelScopeBodies(context, modelId, prompt, size, refImages);
         String submitUrl = base + "/images/generations";
@@ -121,10 +215,10 @@ public class ImageGenApi {
         ApiError lastFieldError = null;
         for (JsonObject body : attempts) {
             try {
-                taskId = submitModelScope(provider, submitUrl, body);
+                taskId = submitModelScope(provider, submitUrl, body, budget);
                 break;
             } catch (ApiError e) {
-                // 只有字段类错误才继续换字段名；鉴权/额度/网络错误直接抛出。
+                // 只有字段类错误才继续换字段名；鉴权/额度/网络/限流错误直接抛出。
                 if (attempts.size() > 1 && isFieldError(e)) {
                     lastFieldError = e;
                     continue;
@@ -138,14 +232,27 @@ public class ImageGenApi {
         }
 
         String taskUrl = base + "/tasks/" + taskId;
-        long deadline = System.currentTimeMillis() + MODELSCOPE_POLL_TIMEOUT_MS;
+        // 单调时钟计时，避免用户改系统时间影响超时判定
+        long deadlineNs = System.nanoTime() + MODELSCOPE_POLL_TIMEOUT_MS * 1000000L;
+        // 取消计数：用户取消后不再发起新的轮询请求
+        final long cancelEpoch = ProviderRateLimiter.cancelEpoch(
+                provider, ProviderRateLimiter.RequestType.IMAGE);
         String lastStatus = null;
-        while (System.currentTimeMillis() < deadline) {
+        ApiError lastTransportError = null;
+        while (System.nanoTime() < deadlineNs) {
+            if (ProviderRateLimiter.cancelEpoch(provider, ProviderRateLimiter.RequestType.IMAGE)
+                    != cancelEpoch) {
+                throw new ApiError("生图请求已取消", false, null);
+            }
             try {
                 Thread.sleep(MODELSCOPE_POLL_INTERVAL_MS);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 throw new ApiError("生图任务被中断", false, null);
+            }
+            if (ProviderRateLimiter.cancelEpoch(provider, ProviderRateLimiter.RequestType.IMAGE)
+                    != cancelEpoch) {
+                throw new ApiError("生图请求已取消", false, null);
             }
 
             Request.Builder pollBuilder = new Request.Builder()
@@ -153,15 +260,29 @@ public class ImageGenApi {
                     .header("Authorization", "Bearer " + ApiAuth.sanitize(provider.apiKey))
                     .header("X-ModelScope-Task-Type", "image_generation");
             ApiCompatHeaders.apply(pollBuilder, taskUrl);
+            final Request pollRequest = pollBuilder.get().build();
+
+            // 每次轮询单独申请一次供应商额度；两次轮询之间不占用 HTTP 并发许可
             String text;
-            try (Response response = CLIENT.newCall(pollBuilder.get().build()).execute()) {
-                ResponseBody responseBody = response.body();
-                text = responseBody != null ? responseBody.string() : "";
-                if (!response.isSuccessful()) {
-                    // 轮询偶发 5xx/限流不致命，继续等下一轮
-                    continue;
+            try {
+                text = guarded(provider, budget, entry -> {
+                    try (Response response = execute(entry, pollRequest)) {
+                        ResponseBody responseBody = response.body();
+                        String bodyText = responseBody != null ? responseBody.string() : "";
+                        if (!response.isSuccessful()) {
+                            // 429 / 额度 / 认证必须让调用方看到，不能静默继续轮询
+                            throw httpError(bodyText, response.code(), response.header("Retry-After"));
+                        }
+                        return bodyText;
+                    }
+                });
+            } catch (ApiError e) {
+                if (e.kind == ErrorMapper.Kind.RATE_LIMIT || e.kind == ErrorMapper.Kind.QUOTA
+                        || e.kind == ErrorMapper.Kind.AUTH) {
+                    throw withHint(e, "任务可能仍在服务端生成，请稍后到平台查看结果");
                 }
-            } catch (IOException e) {
+                // 网络/5xx：在预算与总时限内继续轮询
+                lastTransportError = e;
                 continue;
             }
 
@@ -182,6 +303,7 @@ public class ImageGenApi {
                 Outcome outcome = new Outcome();
                 for (int i = 0; i < images.size(); i++) {
                     String url = images.get(i).isJsonNull() ? null : images.get(i).getAsString();
+                    // CDN 下载不占供应商额度
                     byte[] bytes = download(url);
                     if (bytes != null) {
                         String filename = ImageCompressor.saveGeneratedImage(context, bytes);
@@ -198,9 +320,12 @@ public class ImageGenApi {
             }
             // PENDING / RUNNING 等继续轮询
         }
+        String suffix = lastStatus != null ? "，最后状态 " + lastStatus : "";
+        if (lastTransportError != null) {
+            suffix += "；最后一次错误：" + lastTransportError.getMessage();
+        }
         throw new ApiError("魔搭生图超时（已等待 "
-                + (MODELSCOPE_POLL_TIMEOUT_MS / 1000) + " 秒"
-                + (lastStatus != null ? "，最后状态 " + lastStatus : "")
+                + (MODELSCOPE_POLL_TIMEOUT_MS / 1000) + " 秒" + suffix
                 + "），请稍后重试", true, null);
     }
 
@@ -261,41 +386,43 @@ public class ImageGenApi {
         return body;
     }
 
-    private static String submitModelScope(Provider provider, String submitUrl, JsonObject body)
-            throws ApiError {
+    private static String submitModelScope(Provider provider, String submitUrl, JsonObject body,
+                                           Budget budget) throws ApiError {
         Request.Builder submitBuilder = new Request.Builder()
                 .url(submitUrl)
                 .header("Authorization", "Bearer " + ApiAuth.sanitize(provider.apiKey))
                 .header("Content-Type", "application/json")
                 .header("X-ModelScope-Async-Mode", "true");
         ApiCompatHeaders.apply(submitBuilder, submitUrl);
+        final Request submitRequest = submitBuilder
+                .post(RequestBody.create(body.toString(), JSON)).build();
 
-        try (Response response = CLIENT.newCall(submitBuilder
-                .post(RequestBody.create(body.toString(), JSON)).build()).execute()) {
-            ResponseBody responseBody = response.body();
-            String text = responseBody != null ? responseBody.string() : "";
-            if (!response.isSuccessful()) {
-                throw new ApiError(extractError(text, response.code()), false, text,
-                        response.code(), null, false, 0);
+        String text = guarded(provider, budget, entry -> {
+            try (Response response = execute(entry, submitRequest)) {
+                ResponseBody responseBody = response.body();
+                String bodyText = responseBody != null ? responseBody.string() : "";
+                if (!response.isSuccessful()) {
+                    throw httpError(bodyText, response.code(), response.header("Retry-After"));
+                }
+                return bodyText;
             }
-            JsonObject obj;
-            try {
-                obj = JsonParser.parseString(text).getAsJsonObject();
-            } catch (Exception e) {
-                throw new ApiError("魔搭提交任务响应解析失败", false, text);
-            }
-            if (obj.has("errors") || obj.has("error")) {
-                throw new ApiError(extractError(text, 0), false, text);
-            }
-            String taskId = obj.has("task_id") && !obj.get("task_id").isJsonNull()
-                    ? obj.get("task_id").getAsString() : null;
-            if (taskId == null || taskId.length() == 0) {
-                throw new ApiError("魔搭未返回 task_id，请稍后重试", false, text);
-            }
-            return taskId;
-        } catch (IOException e) {
-            throw new ApiError("魔搭提交任务失败：" + e.getMessage(), true, null);
+        });
+
+        JsonObject obj;
+        try {
+            obj = JsonParser.parseString(text).getAsJsonObject();
+        } catch (Exception e) {
+            throw new ApiError("魔搭提交任务响应解析失败", false, text);
         }
+        if (obj.has("errors") || obj.has("error")) {
+            throw new ApiError(extractError(text, 0), false, text);
+        }
+        String taskId = obj.has("task_id") && !obj.get("task_id").isJsonNull()
+                ? obj.get("task_id").getAsString() : null;
+        if (taskId == null || taskId.length() == 0) {
+            throw new ApiError("魔搭未返回 task_id，请稍后重试", false, text);
+        }
+        return taskId;
     }
 
     private static boolean isFieldError(ApiError error) {
@@ -372,7 +499,8 @@ public class ImageGenApi {
     }
 
     private static Outcome requestOnce(Context context, Provider provider, String modelId,
-                                       String prompt, String size, int n, boolean withResponseFormat)
+                                       String prompt, String size, int n, boolean withResponseFormat,
+                                       Budget budget)
             throws ApiError {
         JsonObject body = new JsonObject();
         body.addProperty("model", modelId);
@@ -392,21 +520,26 @@ public class ImageGenApi {
                 .header("Content-Type", "application/json");
         // 已知会对客户端做指纹校验的站点（如 agentrouter.org），自动补上兼容头
         ApiCompatHeaders.apply(requestBuilder, url);
-        Request request = requestBuilder
+        final Request request = requestBuilder
                 .post(RequestBody.create(body.toString(), JSON))
                 .build();
 
-        try (Response response = CLIENT.newCall(request).execute()) {
-            if (!response.isSuccessful()) {
-                ResponseBody responseBody = response.body();
-                String text = responseBody != null ? responseBody.string() : "";
-                throw new ApiError(extractError(text, response.code()), false, text);
+        try {
+            return guarded(provider, budget, entry -> {
+                try (Response response = execute(entry, request)) {
+                    if (!response.isSuccessful()) {
+                        ResponseBody responseBody = response.body();
+                        String text = responseBody != null ? responseBody.string() : "";
+                        throw httpError(text, response.code(), response.header("Retry-After"));
+                    }
+                    return parseResponse(context, response);
+                }
+            });
+        } catch (ApiError e) {
+            if (e.isTimeout && e.httpCode == 0) {
+                throw new ApiError(context.getString(R.string.imagegen_timeout_billing), true, null);
             }
-            return parseResponse(context, response);
-        } catch (java.net.SocketTimeoutException e) {
-            throw new ApiError(context.getString(R.string.imagegen_timeout_billing), true, null);
-        } catch (IOException e) {
-            throw new ApiError("生图请求失败：" + e.getMessage(), true, null);
+            throw e;
         }
     }
 
@@ -418,7 +551,7 @@ public class ImageGenApi {
      */
     private static Outcome requestEdit(Context context, Provider provider, String modelId,
                                        String prompt, String size, int n,
-                                       List<String> refImages) throws ApiError {
+                                       List<String> refImages, Budget budget) throws ApiError {
         MultipartBody.Builder builder = new MultipartBody.Builder()
                 .setType(MultipartBody.FORM)
                 .addFormDataPart("model", modelId)
@@ -444,23 +577,28 @@ public class ImageGenApi {
                 .url(url)
                 .header("Authorization", "Bearer " + ApiAuth.sanitize(provider.apiKey));
         ApiCompatHeaders.apply(requestBuilder, url);
-        Request request = requestBuilder.post(builder.build()).build();
+        final Request request = requestBuilder.post(builder.build()).build();
 
-        try (Response response = CLIENT.newCall(request).execute()) {
-            if (!response.isSuccessful()) {
-                ResponseBody responseBody = response.body();
-                String text = responseBody != null ? responseBody.string() : "";
-                String error = extractError(text, response.code());
-                if (response.code() == 400 || response.code() == 404 || response.code() == 405) {
-                    error += "\n" + context.getString(R.string.imagegen_ref_only_modelscope);
+        try {
+            return guarded(provider, budget, entry -> {
+                try (Response response = execute(entry, request)) {
+                    if (!response.isSuccessful()) {
+                        ResponseBody responseBody = response.body();
+                        String text = responseBody != null ? responseBody.string() : "";
+                        ApiError error = httpError(text, response.code(), response.header("Retry-After"));
+                        if (response.code() == 400 || response.code() == 404 || response.code() == 405) {
+                            error = withHint(error, context.getString(R.string.imagegen_ref_only_modelscope));
+                        }
+                        throw error;
+                    }
+                    return parseResponse(context, response);
                 }
-                throw new ApiError(error, false, text, response.code(), null, false, 0);
+            });
+        } catch (ApiError e) {
+            if (e.isTimeout && e.httpCode == 0) {
+                throw new ApiError(context.getString(R.string.imagegen_timeout_billing), true, null);
             }
-            return parseResponse(context, response);
-        } catch (java.net.SocketTimeoutException e) {
-            throw new ApiError(context.getString(R.string.imagegen_timeout_billing), true, null);
-        } catch (IOException e) {
-            throw new ApiError("图生图请求失败：" + e.getMessage(), true, null);
+            throw e;
         }
     }
 

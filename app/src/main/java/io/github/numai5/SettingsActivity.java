@@ -29,6 +29,7 @@ import io.github.numai5.api.ApiError;
 import io.github.numai5.api.ApiService;
 import io.github.numai5.data.BackupManager;
 import io.github.numai5.data.ConfigManager;
+import io.github.numai5.data.ProviderRateLimiter;
 import io.github.numai5.model.Config;
 import io.github.numai5.provider.ModelCatalog;
 import io.github.numai5.provider.ModelDef;
@@ -78,6 +79,21 @@ public class SettingsActivity extends AppCompatActivity {
     protected void onResume() {
         super.onResume();
         io.github.numai5.data.UiSettings.checkGeneration(this);
+        // 回到设置页时刷新供应商调度状态（排队/冷却/暂停）
+        if (configManager != null && providerList != null) {
+            renderProviders();
+        }
+    }
+
+    @Override
+    protected void onDestroy() {
+        // 离开设置页：取消仍在排队的模型列表请求（只影响 MODEL_LIST，不动聊天与生图）
+        if (apiService != null && configManager != null) {
+            for (Provider p : configManager.getProviders()) {
+                apiService.cancelModels(p);
+            }
+        }
+        super.onDestroy();
     }
 
     @Override
@@ -261,11 +277,35 @@ public class SettingsActivity extends AppCompatActivity {
             } else {
                 info.setText(url);
             }
-            models.setText(getString(R.string.provider_models_format, p.models == null ? 0 : p.models.size()));
+            models.setText(getString(R.string.provider_models_format, p.models == null ? 0 : p.models.size())
+                    + (p.minIntervalSec > 0
+                    ? "  ·  " + getString(R.string.provider_min_interval_info, p.minIntervalSec)
+                    : "")
+                    + "  ·  " + rateStatusText(p));
 
             row.setOnClickListener(v -> showProviderDialog(p));
             providerList.addView(row);
         }
+    }
+
+    /**
+     * 供应商调度状态：空闲 / 发送中 / 排队 N / 冷却 N 秒 / 已暂停（额度、认证）。
+     * 状态由 ProviderRateLimiter 统一提供，界面只做展示，不缓存名次。
+     */
+    private String rateStatusText(Provider p) {
+        ProviderRateLimiter.Status status = ProviderRateLimiter.statusOf(p);
+        if (status.isPaused()) {
+            return status.pausedReason == ProviderRateLimiter.Reason.QUOTA_EXHAUSTED
+                    ? getString(R.string.provider_rate_paused_quota)
+                    : getString(R.string.provider_rate_paused_auth);
+        }
+        if (status.isCoolingDown()) {
+            int seconds = (int) Math.max(1L, (status.cooldownRemainingMs + 999L) / 1000L);
+            return getString(R.string.provider_rate_cooldown, seconds);
+        }
+        if (status.running > 0) return getString(R.string.provider_rate_running);
+        if (status.queued > 0) return getString(R.string.provider_rate_queued, status.queued);
+        return getString(R.string.provider_rate_idle);
     }
 
     /** 编辑供应商：保存 / 拉取模型 / 删除 */
@@ -274,12 +314,15 @@ public class SettingsActivity extends AppCompatActivity {
         final EditText editName = content.findViewById(R.id.dialogProviderName);
         final EditText editBaseUrl = content.findViewById(R.id.dialogProviderBaseUrl);
         final EditText editApiKey = content.findViewById(R.id.dialogProviderApiKey);
+        final EditText editMinInterval = content.findViewById(R.id.dialogProviderMinInterval);
         final Button btnPasteApiKey = content.findViewById(R.id.btnPasteApiKey);
         final Button btnToggleApiKey = content.findViewById(R.id.btnToggleApiKey);
 
         editName.setText(provider.name);
         editBaseUrl.setText(provider.baseUrl);
         editApiKey.setText(provider.apiKey);
+        editMinInterval.setText(provider.minIntervalSec > 0
+                ? String.valueOf(provider.minIntervalSec) : "0");
 
         // Key 默认遮罩显示；这里用代码施加遮罩，而不是 inputType="textPassword"，
         // 以免触发系统安全键盘（它会禁用粘贴，长 Key 根本没法输入）
@@ -299,14 +342,16 @@ public class SettingsActivity extends AppCompatActivity {
                     configManager.updateProvider(provider.id,
                             editName.getText().toString(),
                             editBaseUrl.getText().toString(),
-                            editApiKey.getText().toString());
+                            editApiKey.getText().toString(),
+                            parseMinInterval(editMinInterval));
                     renderProviders();
                 })
                 .setNeutralButton(R.string.fetch_provider_models, (dialog, which) -> {
                     configManager.updateProvider(provider.id,
                             editName.getText().toString(),
                             editBaseUrl.getText().toString(),
-                            editApiKey.getText().toString());
+                            editApiKey.getText().toString(),
+                            parseMinInterval(editMinInterval));
                     renderProviders();
                     fetchModels(provider);
                 })
@@ -319,6 +364,20 @@ public class SettingsActivity extends AppCompatActivity {
     private void applyKeyMask(EditText editText, boolean visible) {
         editText.setTransformationMethod(visible ? null : PasswordTransformationMethod.getInstance());
         editText.setSelection(editText.getText().length());
+    }
+
+    /** 解析限流间隔输入：空或非法按 0（只串行不等待），上限 600 秒 */
+    private int parseMinInterval(EditText input) {
+        if (input == null) return 0;
+        String raw = input.getText().toString().trim();
+        if (raw.length() == 0) return 0;
+        try {
+            int value = Integer.parseInt(raw);
+            if (value < 0) return 0;
+            return Math.min(value, 600);
+        } catch (NumberFormatException e) {
+            return 0;
+        }
     }
 
     /** 一键粘贴：避免在老设备上长按选择「粘贴」的麻烦 */

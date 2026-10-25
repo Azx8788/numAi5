@@ -334,6 +334,22 @@ public class ImageGenActivity extends Activity implements ImageGenManager.Listen
         statusText.setText(R.string.imagegen_background_hint);
         btnStart.setEnabled(false);
         findViewById(R.id.genBusyBadge).setVisibility(View.VISIBLE);
+        // 长按状态条可取消本次生图（取消只影响生图任务，不影响聊天与其他请求）
+        statusBar.setOnClickListener(v -> confirmCancelGen());
+    }
+
+    /** 取消正在执行的生图：断开其 HTTP 调用，并释放调度器里的排队与并发许可 */
+    private void confirmCancelGen() {
+        final ImageGenManager manager = ImageGenManager.getInstance(this);
+        if (!manager.isRunning()) return;
+        new AlertDialog.Builder(this)
+                .setMessage(R.string.imagegen_cancel_confirm)
+                .setPositiveButton(R.string.imagegen_cancel, (dialog, which) -> {
+                    manager.cancel();
+                    toast(getString(R.string.imagegen_cancel_requested));
+                })
+                .setNegativeButton(R.string.cancel, null)
+                .show();
     }
 
     private void showIdle() {

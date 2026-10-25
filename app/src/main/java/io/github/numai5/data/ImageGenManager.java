@@ -60,6 +60,7 @@ public class ImageGenManager {
 
     private String activeTaskId;
     private String activeModelName = "";
+    private Provider activeProvider;
     private List<String> lastResultFiles;
 
     private ImageGenManager(Context context) {
@@ -89,6 +90,17 @@ public class ImageGenManager {
     /** 进程内是否有生图任务在跑（UI 判断用；进程被杀后不会误报） */
     public boolean isRunning() {
         return activeTaskId != null;
+    }
+
+    /**
+     * 取消当前生图任务：断开它的 HTTP 调用、清空该供应商的图片排队。
+     * 只影响 {@link ProviderRateLimiter.RequestType#IMAGE}，聊天与模型列表排队不动。
+     */
+    public void cancel() {
+        Provider provider = activeProvider;
+        if (provider != null) {
+            ProviderRateLimiter.cancelCategory(provider, ProviderRateLimiter.RequestType.IMAGE);
+        }
     }
 
     /** 上次成功生成的文件（生图对话框重新打开时展示） */
@@ -138,6 +150,7 @@ public class ImageGenManager {
 
         String taskId = UUID.randomUUID().toString();
         activeTaskId = taskId;
+        activeProvider = provider;
         activeModelName = (model.displayName != null && model.displayName.length() > 0)
                 ? model.displayName : model.id;
 
@@ -168,6 +181,7 @@ public class ImageGenManager {
         String taskId = prefs.getString(KEY_TASK_ID, null);
         prefs.edit().clear().apply();
         activeTaskId = null;
+        activeProvider = null;
         lastResultFiles = (errorMessage == null && filenames != null)
                 ? new ArrayList<>(filenames) : null;
         if (lastResultFiles != null) {

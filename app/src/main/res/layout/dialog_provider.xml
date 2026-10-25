@@ -77,5 +77,22 @@
             android:text="@string/api_key_plain_hint"
             android:textColor="@color/text_meta"
             android:textSize="11sp" />
+
+        <EditText
+            android:id="@+id/dialogProviderMinInterval"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:hint="@string/provider_min_interval_hint"
+            android:inputType="number"
+            android:maxLength="4" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="@string/provider_min_interval_desc"
+            android:textColor="@color/text_meta"
+            android:textSize="11sp" />
     </LinearLayout>
 </ScrollView>
