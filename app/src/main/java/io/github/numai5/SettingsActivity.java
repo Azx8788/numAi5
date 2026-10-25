@@ -1,11 +1,15 @@
 package io.github.numai5;
 
+import android.Manifest;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
+import android.os.Environment;
 import android.text.method.PasswordTransformationMethod;
 import android.view.LayoutInflater;
 import android.view.View;
@@ -16,9 +20,16 @@ import android.widget.TextView;
 import android.widget.Toast;
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.app.ActivityCompat;
+import androidx.core.content.ContextCompat;
 import com.google.android.material.switchmaterial.SwitchMaterial;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.OutputStream;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Date;
 import java.util.HashSet;
 import java.util.List;
@@ -50,9 +61,15 @@ public class SettingsActivity extends AppCompatActivity {
     private SwitchMaterial switchNewapi;
     private ConfigManager configManager;
     private String selectedDefaultModelId;
+    /** 根证书包状态显示与导入按钮 */
+    private TextView tvCertStatus;
+    private Button btnImportCert;
+    /** 待执行的操作：0 无，1 导出，2 导入，3 证书包 */
+    private int pendingStorageAction = 0;
 
     private static final int REQ_EXPORT = 201;
     private static final int REQ_IMPORT = 202;
+    private static final int REQ_STORAGE = 203;
 
     /**
      * 注意：不能在字段初始化里创建（如 `= new ApiService(this)`）。
@@ -82,6 +99,10 @@ public class SettingsActivity extends AppCompatActivity {
         // 回到设置页时刷新供应商调度状态（排队/冷却/暂停）
         if (configManager != null && providerList != null) {
             renderProviders();
+        }
+        // 刷新证书包状态（可能刚导入或尚未加载完成）
+        if (tvCertStatus != null) {
+            tvCertStatus.setText(io.github.numai5.api.TlsCompat.describe());
         }
     }
 
@@ -117,6 +138,8 @@ public class SettingsActivity extends AppCompatActivity {
         btnMemory = findViewById(R.id.btnMemory);
         editSystemPrompt = findViewById(R.id.editSystemPrompt);
         switchNewapi = findViewById(R.id.switchNewapi);
+        tvCertStatus = findViewById(R.id.tvCertStatus);
+        btnImportCert = findViewById(R.id.btnImportCert);
 
         editSystemPrompt.setText(config.systemPrompt);
         switchNewapi.setChecked(config.newapiDialect);
@@ -137,6 +160,10 @@ public class SettingsActivity extends AppCompatActivity {
         btnImageGenTag.setOnClickListener(v -> showModelTagDialog());
         btnUiTune.setOnClickListener(v -> startActivity(new Intent(this, TuneActivity.class)));
         btnMemory.setOnClickListener(v -> startActivity(new Intent(this, MemoryActivity.class)));
+        btnImportCert.setOnClickListener(v -> startCertImport());
+        if (tvCertStatus != null) {
+            tvCertStatus.setText(io.github.numai5.api.TlsCompat.describe());
+        }
     }
 
     // ===== 绘图模型标记 =====
@@ -166,21 +193,182 @@ public class SettingsActivity extends AppCompatActivity {
         intent.setType("application/json");
         String stamp = new SimpleDateFormat("yyyyMMdd-HHmm", Locale.US).format(new Date());
         intent.putExtra(Intent.EXTRA_TITLE, "numAi5-backup-" + stamp + ".json");
-        try {
-            startActivityForResult(intent, REQ_EXPORT);
-        } catch (Exception e) {
-            Toast.makeText(this, R.string.backup_no_picker, Toast.LENGTH_SHORT).show();
+        if (intent.resolveActivity(getPackageManager()) != null) {
+            try {
+                startActivityForResult(intent, REQ_EXPORT);
+                return;
+            } catch (Exception ignored) {
+            }
         }
+        startExportFallback();
     }
 
     private void startImport() {
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
         intent.addCategory(Intent.CATEGORY_OPENABLE);
         intent.setType("*/*");
-        try {
-            startActivityForResult(intent, REQ_IMPORT);
-        } catch (Exception e) {
-            Toast.makeText(this, R.string.backup_no_picker, Toast.LENGTH_SHORT).show();
+        if (intent.resolveActivity(getPackageManager()) != null) {
+            try {
+                startActivityForResult(intent, REQ_IMPORT);
+                return;
+            } catch (Exception ignored) {
+            }
+        }
+        startImportFallback();
+    }
+
+    // ===== 文件选择器缺失时的兜底：读写公共下载目录 =====
+
+    private void startExportFallback() {
+        if (!ensureStoragePermission(1)) return;
+        Toast.makeText(this, R.string.backup_exporting, Toast.LENGTH_SHORT).show();
+        new Thread(() -> {
+            String error = null;
+            File file = null;
+            try {
+                file = BackupManager.exportToFile(this);
+            } catch (Exception e) {
+                error = e.getMessage() != null ? e.getMessage() : e.toString();
+            }
+            final File result = file;
+            final String failure = error;
+            runOnUiThread(() -> {
+                if (failure != null) {
+                    Toast.makeText(this, getString(R.string.backup_export_failed, failure),
+                            Toast.LENGTH_LONG).show();
+                } else {
+                    Toast.makeText(this, getString(R.string.backup_export_done_path,
+                            result.getAbsolutePath()), Toast.LENGTH_LONG).show();
+                }
+            });
+        }).start();
+    }
+
+    private void startImportFallback() {
+        if (!ensureStoragePermission(2)) return;
+        new Thread(() -> {
+            final List<File> files = BackupManager.scanBackups(this);
+            runOnUiThread(() -> {
+                if (files.isEmpty()) {
+                    Toast.makeText(this, R.string.backup_no_files, Toast.LENGTH_LONG).show();
+                    return;
+                }
+                String[] labels = new String[files.size()];
+                for (int i = 0; i < files.size(); i++) {
+                    labels[i] = BackupManager.fileLabel(files.get(i));
+                }
+                new AlertDialog.Builder(this)
+                        .setTitle(R.string.import_backup)
+                        .setItems(labels, (d, which) -> confirmImport(files.get(which)))
+                        .setNegativeButton(R.string.cancel, null)
+                        .show();
+            });
+        }).start();
+    }
+
+    // ===== 根证书包导入（从下载目录读取） =====
+
+    private void startCertImport() {
+        if (!ensureStoragePermission(3)) return;
+        new Thread(() -> {
+            File dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+            File[] pems = dir.listFiles((d, name) ->
+                    name != null && name.toLowerCase(Locale.ROOT).endsWith(".pem"));
+            File[] files = pems == null ? new File[0] : Arrays.copyOf(pems, pems.length);
+            Arrays.sort(files, (a, b) -> Long.compare(b.lastModified(), a.lastModified()));
+            final File[] sorted = files;
+            runOnUiThread(() -> {
+                if (sorted.length == 0) {
+                    Toast.makeText(this, R.string.cert_no_pem, Toast.LENGTH_LONG).show();
+                    return;
+                }
+                if (sorted.length == 1) {
+                    doCertImport(sorted[0]);
+                    return;
+                }
+                String[] labels = new String[sorted.length];
+                for (int i = 0; i < sorted.length; i++) {
+                    labels[i] = sorted[i].getName() + "  " + (sorted[i].length() / 1024) + "KB";
+                }
+                new AlertDialog.Builder(this)
+                        .setTitle(R.string.cert_import)
+                        .setItems(labels, (d, which) -> doCertImport(sorted[which]))
+                        .setNegativeButton(R.string.cancel, null)
+                        .show();
+            });
+        }).start();
+    }
+
+    private void doCertImport(final File file) {
+        new Thread(() -> {
+            String error = null;
+            boolean ok = false;
+            try {
+                byte[] data = readFileBytes(file);
+                ok = io.github.numai5.api.TlsCompat.importBundle(this, data);
+            } catch (Exception e) {
+                error = e.getMessage() != null ? e.getMessage() : e.toString();
+            }
+            final boolean success = ok;
+            final String failure = error;
+            runOnUiThread(() -> {
+                if (success) {
+                    if (tvCertStatus != null) {
+                        tvCertStatus.setText(io.github.numai5.api.TlsCompat.describe());
+                    }
+                    Toast.makeText(this, R.string.cert_imported, Toast.LENGTH_LONG).show();
+                } else {
+                    String msg = failure != null ? failure
+                            : io.github.numai5.api.TlsCompat.lastImportError();
+                    Toast.makeText(this, getString(R.string.cert_import_failed, msg),
+                            Toast.LENGTH_LONG).show();
+                }
+            });
+        }).start();
+    }
+
+    /** 读取文件全部字节 */
+    private static byte[] readFileBytes(File file) throws Exception {
+        byte[] data = new byte[(int) file.length()];
+        try (FileInputStream in = new FileInputStream(file)) {
+            int off = 0, n;
+            while (off < data.length && (n = in.read(data, off, data.length - off)) != -1) {
+                off += n;
+            }
+            if (off < data.length) data = Arrays.copyOf(data, off);
+        }
+        return data;
+    }
+
+    /** 申请存储权限，已授予返回 true，未授予则记录待执行动作并返回 false */
+    private boolean ensureStoragePermission(int action) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
+                && ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                != PackageManager.PERMISSION_GRANTED) {
+            pendingStorageAction = action;
+            ActivityCompat.requestPermissions(this,
+                    new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE}, REQ_STORAGE);
+            return false;
+        }
+        return true;
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode != REQ_STORAGE) return;
+        int action = pendingStorageAction;
+        pendingStorageAction = 0;
+        if (grantResults.length == 0
+                || grantResults[0] != PackageManager.PERMISSION_GRANTED) {
+            Toast.makeText(this, R.string.storage_required, Toast.LENGTH_LONG).show();
+            return;
+        }
+        switch (action) {
+            case 1: startExportFallback(); break;
+            case 2: startImportFallback(); break;
+            case 3: startCertImport(); break;
+            default: break;
         }
     }
 
@@ -222,23 +410,40 @@ public class SettingsActivity extends AppCompatActivity {
             } catch (Exception e) {
                 error = e.getMessage() != null ? e.getMessage() : e.toString();
             }
-            final BackupManager.Backup parsed = backup;
-            final String failure = error;
-            runOnUiThread(() -> {
-                if (failure != null || parsed == null) {
-                    Toast.makeText(SettingsActivity.this,
-                            getString(R.string.backup_import_failed, failure), Toast.LENGTH_LONG).show();
-                    return;
-                }
-                new AlertDialog.Builder(SettingsActivity.this)
-                        .setTitle(R.string.import_backup)
-                        .setMessage(getString(R.string.backup_import_confirm,
-                                BackupManager.describe(parsed)))
-                        .setPositiveButton(R.string.backup_import_do, (d, w) -> doImport(parsed))
-                        .setNegativeButton(R.string.cancel, null)
-                        .show();
-            });
+            showImportConfirm(backup, error);
         }).start();
+    }
+
+    /** 从文件读取备份（文件选择器缺失的兜底路径） */
+    private void confirmImport(final File file) {
+        new Thread(() -> {
+            String error = null;
+            BackupManager.Backup backup = null;
+            try {
+                backup = BackupManager.readBackup(SettingsActivity.this, file);
+            } catch (Exception e) {
+                error = e.getMessage() != null ? e.getMessage() : e.toString();
+            }
+            showImportConfirm(backup, error);
+        }).start();
+    }
+
+    /** 展示备份摘要并确认覆盖导入 */
+    private void showImportConfirm(final BackupManager.Backup parsed, final String failure) {
+        runOnUiThread(() -> {
+            if (failure != null || parsed == null) {
+                Toast.makeText(SettingsActivity.this,
+                        getString(R.string.backup_import_failed, failure), Toast.LENGTH_LONG).show();
+                return;
+            }
+            new AlertDialog.Builder(SettingsActivity.this)
+                    .setTitle(R.string.import_backup)
+                    .setMessage(getString(R.string.backup_import_confirm,
+                            BackupManager.describe(parsed)))
+                    .setPositiveButton(R.string.backup_import_do, (d, w) -> doImport(parsed))
+                    .setNegativeButton(R.string.cancel, null)
+                    .show();
+        });
     }
 
     private void doImport(final BackupManager.Backup backup) {

@@ -31,6 +31,8 @@ public class NumAi5App extends Application {
         io.github.numai5.api.TlsCompat.init(this);
         // 预热 LaTeX 渲染：字体首次加载较慢，放到后台线程，避免首条公式卡顿
         new Thread(() -> MathRenderer.warmUp(this)).start();
+        // 预热根证书包：118 张证书首次解析约 800 毫秒，避免进设置页或首个请求卡顿
+        new Thread(() -> io.github.numai5.api.TlsCompat.warmUp()).start();
         final Thread.UncaughtExceptionHandler previous = Thread.getDefaultUncaughtExceptionHandler();
         Thread.setDefaultUncaughtExceptionHandler((thread, throwable) -> {
             try {

@@ -194,5 +194,42 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="6dp"
             android:text="@string/import_backup" />
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:layout_marginTop="16dp"
+            android:background="#22000000" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="@string/cert_section"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:text="@string/cert_hint"
+            android:textColor="@color/text_meta"
+            android:textSize="11sp" />
+
+        <TextView
+            android:id="@+id/tvCertStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:text="加载中"
+            android:textColor="@color/text_meta"
+            android:textSize="12sp" />
+
+        <Button
+            android:id="@+id/btnImportCert"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:text="@string/cert_import" />
     </LinearLayout>
 </ScrollView>

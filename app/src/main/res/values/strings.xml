@@ -239,4 +239,13 @@
         <item>256x256</item>
         <item>auto</item>
     </string-array>
+    <string name="cert_section">根证书包</string>
+    <string name="cert_hint">Android 5 系统根证书过旧，应用内置 Mozilla 根证书包补全。点下方按钮可从下载目录导入更新的证书包：先用浏览器访问 curl.se/ca/cacert.pem 下载（浏览器提示证书不安全时选继续），再点此按钮导入。</string>
+    <string name="cert_import">导入证书包</string>
+    <string name="cert_no_pem">下载目录下没有 .pem 文件，请先用浏览器下载 cacert.pem</string>
+    <string name="cert_imported">证书包已导入，重启应用后完全生效</string>
+    <string name="cert_import_failed">导入失败：%1$s</string>
+    <string name="backup_export_done_path">已导出到：%1$s</string>
+    <string name="backup_no_files">下载目录下没有备份文件</string>
+    <string name="storage_required">需要存储权限才能使用该功能</string>
 </resources>

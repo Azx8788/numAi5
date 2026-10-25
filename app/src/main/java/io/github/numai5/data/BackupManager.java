@@ -2,15 +2,23 @@ package io.github.numai5.data;
 
 import android.content.Context;
 import android.net.Uri;
+import android.os.Environment;
 import android.util.Log;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Date;
 import java.util.List;
+import java.util.Locale;
 import io.github.numai5.model.Chat;
 import io.github.numai5.model.Config;
 import io.github.numai5.provider.Provider;
@@ -67,6 +75,64 @@ public class BackupManager {
             }
             return backup;
         }
+    }
+
+    // ===== 文件选择器缺失时的兜底：直接读写公共下载目录 =====
+
+    /** 兜底目录：Download/numAi5，无 SAF 时用 */
+    public static File fallbackDir(Context context) {
+        File dl = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+        File dir = new File(dl, "numAi5");
+        if (!dir.exists() && !dir.mkdirs()) {
+            // mkdirs 失败时退回 Download 根目录
+            return dl;
+        }
+        return dir;
+    }
+
+    /** 导出备份到兜底目录，返回写入的文件 */
+    public static File exportToFile(Context context) throws Exception {
+        String json = exportJson(context);
+        String stamp = new SimpleDateFormat("yyyyMMdd-HHmm", Locale.US).format(new Date());
+        File file = new File(fallbackDir(context), "numAi5-backup-" + stamp + ".json");
+        try (OutputStream out = new FileOutputStream(file)) {
+            out.write(json.getBytes(StandardCharsets.UTF_8));
+            out.flush();
+        }
+        return file;
+    }
+
+    /** 扫描兜底目录下的备份文件，按修改时间倒序 */
+    public static List<File> scanBackups(Context context) {
+        File dir = fallbackDir(context);
+        File[] files = dir.listFiles((d, name) ->
+                name != null && name.startsWith("numAi5-backup-") && name.endsWith(".json"));
+        List<File> list = new ArrayList<>();
+        if (files != null && files.length > 0) {
+            Arrays.sort(files, (a, b) -> Long.compare(b.lastModified(), a.lastModified()));
+            for (File f : files) list.add(f);
+        }
+        return list;
+    }
+
+    /** 从文件读取备份（兜底路径） */
+    public static Backup readBackup(Context context, File file) throws Exception {
+        try (InputStreamReader reader = new InputStreamReader(
+                new FileInputStream(file), StandardCharsets.UTF_8)) {
+            Backup backup = new Gson().fromJson(reader, Backup.class);
+            if (backup == null) throw new Exception("备份文件内容为空或格式不正确");
+            if (backup.config == null && (backup.chats == null || backup.chats.isEmpty())) {
+                throw new Exception("备份文件中没有可恢复的数据");
+            }
+            return backup;
+        }
+    }
+
+    /** 文件显示名（时间 + 大小） */
+    public static String fileLabel(File file) {
+        if (file == null) return "";
+        String time = new SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(new Date(file.lastModified()));
+        return file.getName() + "  " + time + "  " + (file.length() / 1024) + "KB";
     }
 
     /**

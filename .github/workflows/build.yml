@@ -59,6 +59,38 @@ jobs:
             gradle wrapper --gradle-version 8.2 --distribution-type bin
           fi
 
+      # 发版前拉取 curl.se 维护的最新 Mozilla 根证书包。
+      # 任一步失败都沿用仓库内副本，不影响构建，避免上游故障阻断出包。
+      - name: Refresh CA bundle
+        run: |
+          set +e
+          curl -fsSL --retry 3 --max-time 60 -o /tmp/cacert.pem https://curl.se/ca/cacert.pem
+          curl -fsSL --retry 3 --max-time 60 -o /tmp/cacert.pem.sha256 https://curl.se/ca/cacert.pem.sha256
+          if [ ! -s /tmp/cacert.pem ] || [ ! -s /tmp/cacert.pem.sha256 ]; then
+            echo "证书包下载失败，沿用仓库内副本"
+            exit 0
+          fi
+          if ! (cd /tmp && sha256sum -c cacert.pem.sha256); then
+            echo "校验失败，沿用仓库内副本"
+            exit 0
+          fi
+          COUNT=$(grep -c '^-----BEGIN CERTIFICATE-----' /tmp/cacert.pem)
+          if [ "$COUNT" -lt 60 ]; then
+            echo "证书数量异常：$COUNT，沿用仓库内副本"
+            exit 0
+          fi
+          if ! openssl crl2pkcs7 -nocrl -certfile /tmp/cacert.pem 2>/dev/null \
+              | openssl pkcs7 -print_certs -noout 2>/dev/null \
+              | grep -q 'ISRG Root X1'; then
+            echo "缺少 ISRG Root X1，沿用仓库内副本"
+            exit 0
+          fi
+          cp /tmp/cacert.pem app/src/main/assets/certs/cacert.pem
+          cp /tmp/cacert.pem.sha256 app/src/main/assets/certs/cacert.pem.sha256
+          echo "证书包已刷新，共 $COUNT 张"
+          head -5 app/src/main/assets/certs/cacert.pem
+          sha256sum app/src/main/assets/certs/cacert.pem
+
       # 签名 keystore 从 secrets 解码（步骤23）；secret 缺失时跳过，产出未签名 release
       - name: Decode signing keystore
         env:

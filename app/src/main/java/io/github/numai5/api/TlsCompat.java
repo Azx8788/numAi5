@@ -5,7 +5,13 @@ import android.util.Base64;
 import android.util.Log;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.InputStream;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.Enumeration;
 import java.util.Locale;
 import java.security.KeyStore;
 import java.security.SecureRandom;
@@ -37,10 +43,16 @@ import okhttp3.OkHttpClient;
 public final class TlsCompat {
     private static final String TAG = "TlsCompat";
     private static final String ASSET_DIR = "certs";
+    /** 应用私有目录的证书包子目录 */
+    private static final String CA_DIR = "ca";
 
     private static Context appContext;
     private static X509TrustManager trustManager;
     private static boolean initialized;
+    /** 证书包状态描述，格式：118 张 / 2026-10-20 / 内置 */
+    private static String bundleInfo;
+    /** 上次导入失败的原因 */
+    private static volatile String lastError;
 
     private TlsCompat() {
     }
@@ -49,6 +61,29 @@ public final class TlsCompat {
     public static void init(Context context) {
         if (context == null) return;
         appContext = context.getApplicationContext();
+    }
+
+    /**
+     * 后台预热：提前解析内置证书包。
+     * 118 张证书首次解析约 800 毫秒（桌面 JVM 实测，老设备更慢），
+     * 若留给首个网络请求或首次进入设置页，会在主线程造成可见卡顿。
+     */
+    public static void warmUp() {
+        try {
+            trustManager();
+        } catch (Exception e) {
+            Log.e(TAG, "warmUp failed", e);
+        }
+    }
+
+    /**
+     * 供界面显示证书包状态，格式：118 张 / 2026-10-20 / 内置。
+     * 不触发加载，未就绪时返回「加载中」。
+     */
+    public static String describe() {
+        synchronized (TlsCompat.class) {
+            return bundleInfo == null ? "加载中" : bundleInfo;
+        }
     }
 
     /** 给 OkHttpClient.Builder 装上「系统 + 内置根」的 SSL 校验 */
@@ -102,18 +137,30 @@ public final class TlsCompat {
      */
     private static X509TrustManager bundledTrustManager() {
         if (appContext == null) return null;
+        // 1. 优先用应用私有目录的导入包
+        File imported = new File(appContext.getFilesDir(), CA_DIR + "/cacert.pem");
+        if (imported.isFile()) {
+            String text = safeReadFile(imported);
+            if (text != null) {
+                X509TrustManager tm = buildFromPem(text, "导入");
+                if (tm != null) return tm;
+                Log.e(TAG, "imported bundle invalid, fallback to assets");
+            }
+        }
+        // 2. 回退 assets 内置包
         try {
             String[] files = appContext.getAssets().list(ASSET_DIR);
             if (files == null || files.length == 0) return null;
-
             KeyStore keyStore = KeyStore.getInstance(KeyStore.getDefaultType());
             keyStore.load(null, null);
             CertificateFactory factory = CertificateFactory.getInstance("X.509");
             int loaded = 0;
+            String dataDate = null;
             for (String file : files) {
                 if (file == null || !file.toLowerCase(Locale.ROOT).endsWith(".pem")) continue;
                 try (InputStream in = appContext.getAssets().open(ASSET_DIR + "/" + file)) {
                     String text = readText(in);
+                    if (dataDate == null) dataDate = pemDataDate(text);
                     loaded += loadPemBundle(keyStore, factory, text, loaded);
                 } catch (Exception e) {
                     Log.e(TAG, "load bundled cert failed: " + file, e);
@@ -121,7 +168,35 @@ public final class TlsCompat {
             }
             if (loaded == 0) return null;
             Log.i(TAG, "loaded " + loaded + " bundled root certificates");
+            bundleInfo = loaded + " 张 / " + (dataDate == null ? "日期未知" : dataDate) + " / 内置";
+            return trustManagerFromKeyStore(keyStore);
+        } catch (Exception e) {
+            Log.e(TAG, "bundled trust manager unavailable", e);
+        }
+        return null;
+    }
 
+    /** 从 PEM 文本构建信任管理器，失败返回 null；附带更新 bundleInfo */
+    private static X509TrustManager buildFromPem(String text, String source) {
+        if (text == null) return null;
+        try {
+            KeyStore keyStore = KeyStore.getInstance(KeyStore.getDefaultType());
+            keyStore.load(null, null);
+            CertificateFactory factory = CertificateFactory.getInstance("X.509");
+            int loaded = loadPemBundle(keyStore, factory, text, 0);
+            if (loaded == 0) return null;
+            String date = pemDataDate(text);
+            bundleInfo = loaded + " 张 / " + (date == null ? "日期未知" : date) + " / " + source;
+            Log.i(TAG, "loaded " + loaded + " certs from " + source);
+            return trustManagerFromKeyStore(keyStore);
+        } catch (Exception e) {
+            Log.e(TAG, "build from " + source + " failed", e);
+            return null;
+        }
+    }
+
+    private static X509TrustManager trustManagerFromKeyStore(KeyStore keyStore) {
+        try {
             TrustManagerFactory tmFactory =
                     TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
             tmFactory.init(keyStore);
@@ -129,9 +204,95 @@ public final class TlsCompat {
                 if (manager instanceof X509TrustManager) return (X509TrustManager) manager;
             }
         } catch (Exception e) {
-            Log.e(TAG, "bundled trust manager unavailable", e);
+            Log.e(TAG, "trust manager from keystore failed", e);
         }
         return null;
+    }
+
+    /** 读取文件全部内容为字符串，失败返回 null */
+    private static String safeReadFile(File file) {
+        try (InputStream in = new FileInputStream(file)) {
+            return readText(in);
+        } catch (Exception e) {
+            Log.e(TAG, "read file failed: " + file, e);
+            return null;
+        }
+    }
+
+    /**
+     * 导入外部证书包：校验后写入 filesDir/ca/cacert.pem 并重置缓存。
+     * 校验规则：证书数不少于 60，必须含 ISRG Root X1。
+     * 写入用临时文件 + rename，保证原子；已创建的客户端重启后才完全生效。
+     * 返回 true 表示成功，失败原因见 {@link #lastImportError()}。
+     */
+    public static boolean importBundle(Context context, byte[] pemBytes) {
+        if (context == null || pemBytes == null || pemBytes.length == 0) {
+            lastError = "数据为空";
+            return false;
+        }
+        try {
+            String text = new String(pemBytes, "UTF-8");
+            KeyStore ks = KeyStore.getInstance(KeyStore.getDefaultType());
+            ks.load(null, null);
+            CertificateFactory factory = CertificateFactory.getInstance("X.509");
+            int loaded = loadPemBundle(ks, factory, text, 0);
+            if (loaded < 60) {
+                lastError = "证书数量异常：" + loaded + "（要求不少于 60）";
+                return false;
+            }
+            if (!containsIsrgRootX1(ks)) {
+                lastError = "缺少 ISRG Root X1";
+                return false;
+            }
+            File dir = new File(context.getFilesDir(), CA_DIR);
+            if (!dir.exists() && !dir.mkdirs()) {
+                lastError = "无法创建目录：" + dir;
+                return false;
+            }
+            File tmp = new File(dir, "cacert.pem.tmp");
+            File target = new File(dir, "cacert.pem");
+            try (FileOutputStream out = new FileOutputStream(tmp)) {
+                out.write(pemBytes);
+                out.flush();
+                out.getFD().sync();
+            }
+            if (target.exists() && !target.delete()) {
+                lastError = "无法替换旧证书包";
+                tmp.delete();
+                return false;
+            }
+            if (!tmp.renameTo(target)) {
+                lastError = "写入失败";
+                tmp.delete();
+                return false;
+            }
+            synchronized (TlsCompat.class) {
+                trustManager = null;
+                initialized = false;
+            }
+            // 立即预热，刷新 describe 显示
+            warmUp();
+            return true;
+        } catch (Exception e) {
+            lastError = e.getMessage() != null ? e.getMessage() : e.toString();
+            return false;
+        }
+    }
+
+    /** 上次导入失败的原因，成功时为 null */
+    public static String lastImportError() {
+        return lastError;
+    }
+
+    private static boolean containsIsrgRootX1(KeyStore ks) throws Exception {
+        Enumeration<String> aliases = ks.aliases();
+        while (aliases.hasMoreElements()) {
+            X509Certificate c = (X509Certificate) ks.getCertificate(aliases.nextElement());
+            if (c != null && c.getSubjectX500Principal().getName().contains("ISRG Root X1")) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** 读取整个 PEM 文本（cacert.pem 约 200KB，只读一次） */
@@ -143,6 +304,26 @@ public final class TlsCompat {
             out.write(buffer, 0, len);
         }
         return new String(out.toByteArray(), "UTF-8");
+    }
+
+    /**
+     * 从 cacert.pem 头部读取 Mozilla 数据日期，转为 yyyy-MM-dd。
+     * 单个证书的 PEM 没有这段注释，返回 null。
+     */
+    private static String pemDataDate(String text) {
+        final String key = "Certificate data from Mozilla as of:";
+        int start = text.indexOf(key);
+        if (start < 0) return null;
+        int end = text.indexOf('\n', start);
+        if (end < 0) end = text.length();
+        String raw = text.substring(start + key.length(), end).trim();
+        try {
+            Date date = new SimpleDateFormat("EEE MMM dd HH:mm:ss yyyy zzz", Locale.US).parse(raw);
+            if (date != null) return new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(date);
+        } catch (Exception ignored) {
+            // 格式变化时退回原始字符串，不影响证书加载
+        }
+        return raw;
     }
 
     /**
