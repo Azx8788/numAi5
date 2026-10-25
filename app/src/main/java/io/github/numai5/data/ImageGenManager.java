@@ -127,6 +127,11 @@ public class ImageGenManager {
      */
     public String submit(Context context, Provider provider, ModelDef model,
                          String prompt, String size, int n) {
+        return submit(context, provider, model, prompt, size, n, null);
+    }
+
+    public String submit(Context context, Provider provider, ModelDef model,
+                         String prompt, String size, int n, List<String> refImages) {
         if (provider == null || model == null) return null;
         if (isRunning()) return null;
         if (hasStaleTask()) discardStaleTask();
@@ -141,7 +146,7 @@ public class ImageGenManager {
                 .putString(KEY_PROMPT, prompt)
                 .apply();
 
-        ImageGenService.start(appContext, provider.id, model.uid(), prompt, size, n);
+        ImageGenService.start(appContext, provider.id, model.uid(), prompt, size, n, refImages);
         return taskId;
     }
 

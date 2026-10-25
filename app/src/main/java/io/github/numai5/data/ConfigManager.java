@@ -26,6 +26,7 @@ public class ConfigManager {
     private static final String KEY_SHRINK_THINK = "shrinkThink";
     private static final String KEY_NEWAPI_DIALECT = "newapiDialect";
     private static final String KEY_TOOL_ORDER = "toolOrder";
+    private static final String KEY_MEMORY_ENABLED = "memoryEnabled";
     /** AI 绘图页上次用的模型与尺寸 */
     private static final String KEY_TOOL_PLACEMENT = "toolPlacement";
     private static final String KEY_IMAGEGEN_MODEL_UID = "imagegenModelUid";
@@ -107,6 +108,7 @@ public class ConfigManager {
         c.systemPrompt = preferences.getString(KEY_SYSTEM_PROMPT, "");
         c.shrinkThink = preferences.getBoolean(KEY_SHRINK_THINK, false);
         c.newapiDialect = preferences.getBoolean(KEY_NEWAPI_DIALECT, true);
+        c.memoryEnabled = preferences.getBoolean(KEY_MEMORY_ENABLED, true);
         return c;
     }
 
@@ -117,6 +119,7 @@ public class ConfigManager {
         editor.putString(KEY_SYSTEM_PROMPT, config.systemPrompt == null ? "" : config.systemPrompt);
         editor.putBoolean(KEY_SHRINK_THINK, config.shrinkThink);
         editor.putBoolean(KEY_NEWAPI_DIALECT, config.newapiDialect);
+        editor.putBoolean(KEY_MEMORY_ENABLED, config.memoryEnabled);
         editor.apply();
     }
 
@@ -290,6 +293,8 @@ public class ConfigManager {
     public void updateSystemPrompt(String v) { config.systemPrompt = v == null ? "" : v; save(); }
     public void updateShrinkThink(boolean v) { config.shrinkThink = v; save(); }
     public void updateNewapiDialect(boolean v) { config.newapiDialect = v; save(); }
+    public boolean isMemoryEnabled() { return config.memoryEnabled; }
+    public void setMemoryEnabled(boolean v) { config.memoryEnabled = v; save(); }
 
     /** 供设置页批量保存后统一刷新 */
     public void refresh() {
@@ -313,6 +318,7 @@ public class ConfigManager {
         config.shrinkThink = src.shrinkThink;
         config.webSearchEnabled = src.webSearchEnabled;
         config.webFetchEnabled = src.webFetchEnabled;
+        config.memoryEnabled = src.memoryEnabled;
         save();
     }
 

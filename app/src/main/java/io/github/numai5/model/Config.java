@@ -14,6 +14,7 @@ public class Config {
     public boolean newapiDialect = true;   // 默认按 NewAPI 方言（不支持 max 时自动降级为 high）
     public boolean webSearchEnabled = false;
     public boolean webFetchEnabled = false;
+    public boolean memoryEnabled = true;   // 本地记忆是否参与对话
 
     /** 只要有一个供应商填好地址与 Key 即可拉取模型 */
     public boolean isValidForFetch() {

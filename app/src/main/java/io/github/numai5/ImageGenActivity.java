@@ -1,7 +1,10 @@
 package io.github.numai5;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.graphics.Bitmap;
 import android.os.Bundle;
 import android.view.LayoutInflater;
 import android.view.View;
@@ -12,6 +15,7 @@ import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
+import androidx.annotation.NonNull;
 import androidx.recyclerview.widget.GridLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 import java.io.File;
@@ -23,6 +27,7 @@ import io.github.numai5.provider.ModelCatalog;
 import io.github.numai5.provider.ModelDef;
 import io.github.numai5.provider.Provider;
 import io.github.numai5.vision.ImageCompressor;
+import io.github.numai5.vision.ImagePicker;
 import io.github.numai5.ui.ImageLoader;
 
 /**
@@ -33,6 +38,8 @@ import io.github.numai5.ui.ImageLoader;
 public class ImageGenActivity extends Activity implements ImageGenManager.Listener {
 
     private static final int GRID_COLUMNS = 3;
+    private static final int MAX_REF_IMAGES = 3;
+    private static final String STATE_REF_IMAGES = "refImages";
 
     private ConfigManager configManager;
     private ModelDef genModel;
@@ -49,6 +56,11 @@ public class ImageGenActivity extends Activity implements ImageGenManager.Listen
     private TextView historyEmpty;
     private RecyclerView historyList;
     private HistoryAdapter historyAdapter;
+
+    private LinearLayout refRow;
+    private Button btnAddRef;
+    private TextView refCount;
+    private final List<String> refImages = new ArrayList<>();
 
 
     // ===== 全局界面适配（界面大小 / 边距） =====
@@ -89,6 +101,9 @@ public class ImageGenActivity extends Activity implements ImageGenManager.Listen
         resultRow = findViewById(R.id.genResultRow);
         historyEmpty = findViewById(R.id.genHistoryEmpty);
         historyList = findViewById(R.id.genHistoryList);
+        refRow = findViewById(R.id.genRefRow);
+        btnAddRef = findViewById(R.id.genAddRef);
+        refCount = findViewById(R.id.genRefCount);
 
         findViewById(R.id.genBack).setOnClickListener(v -> finish());
 
@@ -99,6 +114,13 @@ public class ImageGenActivity extends Activity implements ImageGenManager.Listen
         historyList.setLayoutManager(new GridLayoutManager(this, GRID_COLUMNS));
         historyAdapter = new HistoryAdapter();
         historyList.setAdapter(historyAdapter);
+
+        btnAddRef.setOnClickListener(v -> showRefMenu());
+        if (savedInstanceState != null) {
+            ArrayList<String> savedRefs = savedInstanceState.getStringArrayList(STATE_REF_IMAGES);
+            if (savedRefs != null) refImages.addAll(savedRefs);
+        }
+        renderRefImages();
 
         btnSize.setText(genSize);
         resolveGenModel(savedModel);
@@ -213,12 +235,98 @@ public class ImageGenActivity extends Activity implements ImageGenManager.Listen
             toast(getString(R.string.imagegen_busy));
             return;
         }
-        String taskId = manager.submit(this, provider, genModel, prompt, genSize, 1);
+        String taskId = manager.submit(this, provider, genModel, prompt, genSize, 1,
+                new ArrayList<>(refImages));
         if (taskId == null) {
             toast(getString(R.string.imagegen_busy));
             return;
         }
         showRunning();
+    }
+
+    @Override
+    protected void onSaveInstanceState(Bundle outState) {
+        super.onSaveInstanceState(outState);
+        outState.putStringArrayList(STATE_REF_IMAGES, new ArrayList<>(refImages));
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == ImagePicker.REQ_PICK || requestCode == ImagePicker.REQ_CAMERA) {
+            String filename = ImagePicker.onActivityResult(this, requestCode, resultCode, data);
+            if (filename != null) {
+                if (refImages.size() >= MAX_REF_IMAGES) {
+                    toast(getString(R.string.imagegen_ref_limit));
+                    return;
+                }
+                refImages.add(filename);
+                renderRefImages();
+            }
+        }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions,
+                                           @NonNull int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == ImagePicker.PERM_CAMERA) {
+            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                ImagePicker.takePhoto(this);
+            } else {
+                toast(getString(R.string.camera_permission_denied));
+            }
+        }
+    }
+
+    private void showRefMenu() {
+        if (refImages.size() >= MAX_REF_IMAGES) {
+            toast(getString(R.string.imagegen_ref_limit));
+            return;
+        }
+        new AlertDialog.Builder(this)
+                .setItems(new CharSequence[]{
+                        getString(R.string.from_gallery),
+                        getString(R.string.from_camera)
+                }, (dialog, which) -> {
+                    if (which == 0) {
+                        ImagePicker.pickImage(this);
+                    } else {
+                        ImagePicker.takePhoto(this);
+                    }
+                })
+                .show();
+    }
+
+    private void renderRefImages() {
+        if (refRow == null) return;
+        refRow.removeAllViews();
+        refCount.setText(refImages.isEmpty()
+                ? getString(R.string.imagegen_ref_hint)
+                : getString(R.string.imagegen_ref_count, refImages.size()));
+        int size = dp(64);
+        for (final String filename : new ArrayList<>(refImages)) {
+            File file = ImageCompressor.imageFile(this, filename);
+            Bitmap bitmap = ImageLoader.load(file, 256);
+            ImageView view = new ImageView(this);
+            view.setImageBitmap(bitmap);
+            view.setScaleType(ImageView.ScaleType.CENTER_CROP);
+            view.setBackgroundColor(0x22FFFFFF);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(size, size);
+            lp.setMargins(0, 0, dp(8), 0);
+            view.setLayoutParams(lp);
+            view.setOnLongClickListener(v -> {
+                refImages.remove(filename);
+                renderRefImages();
+                toast(getString(R.string.imagegen_ref_remove));
+                return true;
+            });
+            refRow.addView(view);
+        }
+    }
+
+    private int dp(int value) {
+        return Math.round(getResources().getDisplayMetrics().density * value);
     }
 
     private void showRunning() {

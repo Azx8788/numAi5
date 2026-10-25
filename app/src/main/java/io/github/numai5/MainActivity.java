@@ -9,6 +9,7 @@ import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
 import android.view.ViewGroup;
+import android.text.InputType;
 import android.view.inputmethod.EditorInfo;
 import android.widget.Button;
 import android.widget.EditText;
@@ -29,10 +30,13 @@ import io.github.numai5.api.ApiService;
 import io.github.numai5.data.ChatManager;
 import io.github.numai5.data.ConfigManager;
 import io.github.numai5.data.ImageGenManager;
+import io.github.numai5.data.MemoryGuard;
+import io.github.numai5.data.MemoryStore;
 import io.github.numai5.data.MessageManager;
 import io.github.numai5.data.StreamSession;
 import io.github.numai5.model.Chat;
 import io.github.numai5.model.Config;
+import io.github.numai5.model.MemoryFile;
 import io.github.numai5.model.Message;
 import io.github.numai5.model.Role;
 import io.github.numai5.model.ThinkingLevel;
@@ -255,10 +259,6 @@ public class MainActivity extends AppCompatActivity implements StreamSession.Lis
             toast(getString(R.string.imagegen_model_not_chat));
             return;
         }
-        if (!images.isEmpty() && !lockedModel.isVision()) {
-            toast(getString(R.string.no_vision));
-            return;
-        }
 
         Chat chat = chatManager.getCurrentChat();
         Message userMsg = MessageManager.createUserMessage(text, images.isEmpty() ? null : images);
@@ -401,6 +401,7 @@ public class MainActivity extends AppCompatActivity implements StreamSession.Lis
         }
         adapter = new MessageAdapter(chat.messages);
         adapter.setRetryListener(this::retryFailedMessage);
+        adapter.setOnMemorySelectionListener(this::saveSelectionToMemory);
         messageList.setAdapter(adapter);
         updateTitle();
         updateModelButton();
@@ -491,10 +492,6 @@ public class MainActivity extends AppCompatActivity implements StreamSession.Lis
     }
 
     private void showImageMenu() {
-        if (pendingModel != null && !pendingModel.isVision()) {
-            toast(getString(R.string.no_vision));
-            return;
-        }
         new AlertDialog.Builder(this)
                 .setItems(new CharSequence[]{
                         getString(R.string.from_gallery),
@@ -533,6 +530,131 @@ public class MainActivity extends AppCompatActivity implements StreamSession.Lis
                 toast(getString(R.string.camera_permission_denied));
             }
         }
+    }
+
+    // ===== 选中文本：存入记忆 =====
+
+    private void saveSelectionToMemory(String text, boolean stated) {
+        if (text == null || text.trim().length() == 0) return;
+        showSaveMemoryDialog(text.trim(), stated);
+    }
+
+    private void showSaveMemoryDialog(final String text, final boolean stated) {
+        final MemoryStore store = MemoryStore.getInstance(this);
+        store.runOnIo(() -> {
+            final List<MemoryFile> files = store.list();
+            runOnUiThread(() -> {
+                if (isFinishing() || isDestroyed()) return;
+                if (files.isEmpty()) {
+                    new AlertDialog.Builder(this)
+                            .setMessage(R.string.memory_pick_first)
+                            .setPositiveButton(R.string.memory_new_topic,
+                                    (dialog, which) -> showNewTopicForText(text, stated))
+                            .setNegativeButton(R.string.cancel, null)
+                            .show();
+                    return;
+                }
+                String[] labels = new String[files.size() + 1];
+                for (int i = 0; i < files.size(); i++) {
+                    labels[i] = files.get(i).title() + " · " + files.get(i).path;
+                }
+                labels[files.size()] = getString(R.string.memory_new_topic);
+                new AlertDialog.Builder(this)
+                        .setTitle(R.string.memory_choose_target)
+                        .setItems(labels, (dialog, which) -> {
+                            if (which == files.size()) {
+                                showNewTopicForText(text, stated);
+                            } else {
+                                showMemoryLineEditor(files.get(which), text, stated);
+                            }
+                        })
+                        .show();
+            });
+        });
+    }
+
+    private void showNewTopicForText(final String text, final boolean stated) {
+        final EditText input = new EditText(this);
+        input.setHint(R.string.memory_topic_hint);
+        input.setSingleLine(true);
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.memory_topic_name)
+                .setView(input)
+                .setPositiveButton(R.string.memory_add, (dialog, which) -> {
+                    String name = input.getText().toString().trim();
+                    if (name.length() == 0 || name.indexOf('/') >= 0 || name.indexOf('\\') >= 0
+                            || name.startsWith(".")) {
+                        toast(getString(R.string.memory_invalid_path));
+                        return;
+                    }
+                    String path = MemoryFile.normalizePath("/topics/" + name + ".md");
+                    if (path == null) {
+                        toast(getString(R.string.memory_invalid_path));
+                        return;
+                    }
+                    showMemoryLineEditor(null, path, text, stated);
+                })
+                .setNegativeButton(R.string.cancel, null)
+                .show();
+    }
+
+    private void showMemoryLineEditor(final MemoryFile file, final String text,
+                                      final boolean stated) {
+        showMemoryLineEditor(file, file.path, text, stated);
+    }
+
+    private void showMemoryLineEditor(final MemoryFile file, final String path,
+                                      final String text, final boolean stated) {
+        final EditText input = new EditText(this);
+        input.setText(buildMemoryLine(text, stated));
+        input.setMinLines(3);
+        input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.memory_save_to)
+                .setMessage(R.string.memory_append_hint)
+                .setView(input)
+                .setPositiveButton(R.string.save, (dialog, which) -> {
+                    final String line = input.getText().toString().trim();
+                    if (line.length() == 0) return;
+                    String forbidden = MemoryGuard.findForbidden(line);
+                    if (forbidden != null) {
+                        new AlertDialog.Builder(this)
+                                .setMessage(getString(R.string.memory_guard_warn, forbidden))
+                                .setPositiveButton(R.string.memory_guard_save,
+                                        (d, w) -> appendMemory(file, path, line))
+                                .setNegativeButton(R.string.memory_guard_cancel, null)
+                                .show();
+                    } else {
+                        appendMemory(file, path, line);
+                    }
+                })
+                .setNegativeButton(R.string.cancel, null)
+                .show();
+    }
+
+    private String buildMemoryLine(String text, boolean stated) {
+        String value = text == null ? "" : text.trim().replaceAll("\\s+", " ");
+        if (value.length() > 500) value = value.substring(0, 500) + "…";
+        return stated ? "- [stated] " + value : "- " + value;
+    }
+
+    private void appendMemory(final MemoryFile file, final String path, final String line) {
+        final MemoryStore store = MemoryStore.getInstance(this);
+        store.runOnIo(() -> {
+            final MemoryStore.WriteResult result = store.append(
+                    path, line, file != null ? file.version() : null);
+            runOnUiThread(() -> {
+                if (isFinishing() || isDestroyed()) return;
+                if (result.ok()) {
+                    toast(getString(R.string.memory_saved_to, path));
+                } else if (result.status == MemoryStore.Status.CONFLICT) {
+                    toast(getString(R.string.memory_conflict));
+                } else {
+                    toast(getString(R.string.memory_save_failed,
+                            result.reason == null ? "" : result.reason));
+                }
+            });
+        });
     }
 
     // ===== 菜单 =====

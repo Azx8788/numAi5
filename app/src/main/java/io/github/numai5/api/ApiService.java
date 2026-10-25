@@ -20,6 +20,7 @@ import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import io.github.numai5.data.ConfigManager;
 import io.github.numai5.data.ContextTrimmer;
+import io.github.numai5.data.MemoryStore;
 import io.github.numai5.data.MessageManager;
 import io.github.numai5.model.Chat;
 import io.github.numai5.model.Config;
@@ -144,15 +145,34 @@ public class ApiService {
             for (Message m : chat.messages) {
                 if (m != assistantMsg) source.add(m);
             }
+            // 本地记忆：按当前用户消息匹配，只在本次请求注入，不改动聊天历史。
+            MemoryStore.Injection memory = config.memoryEnabled
+                    ? MemoryStore.getInstance(context).buildInjection(
+                            currentUserMessage != null ? currentUserMessage.content : "")
+                    : null;
+            String memoryText = memory != null && !memory.isEmpty() ? memory.text : "";
+
+            // 记忆块占用上下文预算：从历史字符预算中扣除，避免固定注入把历史挤爆。
+            String sysPrompt = config.systemPrompt != null ? config.systemPrompt.trim() : "";
+            int reserve = sysPrompt.length() + memoryText.length() + 200;
+            int maxChars = Math.max(4000, ContextTrimmer.DEFAULT_MAX_CHARS - reserve);
             List<Message> history = new ArrayList<>();
-            boolean trimmed = ContextTrimmer.trim(source, history);
+            boolean trimmed = ContextTrimmer.trim(source, history,
+                    ContextTrimmer.DEFAULT_MAX_ROUNDS, maxChars);
             if (currentUserMessage != null && !history.contains(currentUserMessage)) {
                 history.add(currentUserMessage); // 容错：调用方未把当前消息并入历史时兜底
             }
-            // 系统提示词来自设置页：仅在请求上下文注入，不改动本地聊天历史；已有 system 消息时不重复
-            String sysPrompt = config.systemPrompt != null ? config.systemPrompt.trim() : "";
-            if (sysPrompt.length() > 0 && !containsSystemMessage(history)) {
-                history.add(0, MessageManager.createSystemMessage(sysPrompt));
+            // 系统提示词与记忆合并为一条 system；已有 system 消息时记忆单独一条，避免覆盖用户内容。
+            if (!containsSystemMessage(history)) {
+                String combined = sysPrompt;
+                if (memoryText.length() > 0) {
+                    combined = combined.length() == 0 ? memoryText : combined + "\n\n" + memoryText;
+                }
+                if (combined.length() > 0) {
+                    history.add(0, MessageManager.createSystemMessage(combined));
+                }
+            } else if (memoryText.length() > 0) {
+                history.add(0, MessageManager.createSystemMessage(memoryText));
             }
 
             JsonArray messages = buildMessages(model, history, currentUserMessage);

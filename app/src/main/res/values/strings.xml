@@ -78,6 +78,7 @@
     <string name="provider_name">名称（如 DeepSeek 官转）</string>
     <string name="base_url_hint">中转站地址（https://…/v1）</string>
     <string name="api_key">API Key</string>
+    <string name="api_key_plain_hint">Key 以明文保存在应用私有目录，系统备份已关闭。请勿在共享设备或已 root 的设备上使用重要 Key。</string>
     <string name="paste">粘贴</string>
     <string name="show_key">显示</string>
     <string name="hide_key">隐藏</string>
@@ -155,6 +156,63 @@
     <string name="backup_import_do">覆盖导入</string>
     <string name="backup_import_done">已恢复 %1$d 个会话</string>
 
+
+    <!-- 记忆 -->
+    <string name="memory_title">记忆</string>
+    <string name="memory_add">新建</string>
+    <string name="memory_enabled">参与对话</string>
+    <string name="memory_hint">profile、preferences 与固定项每次都会带上；其余按当前问题关键词匹配最多 2 个。</string>
+    <string name="memory_empty">还没有记忆。点右上角「新建」，或在聊天里长按一条消息存入。</string>
+    <string name="memory_path">路径</string>
+    <string name="memory_path_hint">例如 /topics/work.md</string>
+    <string name="memory_name">标题</string>
+    <string name="memory_description">描述</string>
+    <string name="memory_aliases">别名（逗号分隔）</string>
+    <string name="memory_pinned">每次对话都带上</string>
+    <string name="memory_body">正文</string>
+    <string name="memory_body_hint">一行一条，例如：- [stated] 我喜欢简短回答</string>
+    <string name="memory_size_format">%1$d / %2$d 字节</string>
+    <string name="memory_invalid_path">路径不合法，示例 /topics/work.md</string>
+    <string name="memory_saved">已保存</string>
+    <string name="memory_save_failed">保存失败：%1$s</string>
+    <string name="memory_conflict">这条记忆已被修改，请重新打开后再保存</string>
+    <string name="memory_guard_warn">检测到可能的%1$s，仍要保存吗？</string>
+    <string name="memory_guard_save">仍要保存</string>
+    <string name="memory_guard_cancel">返回修改</string>
+    <string name="memory_template_title">新建记忆</string>
+    <string name="memory_template_profile">个人信息 /profile.md</string>
+    <string name="memory_template_preferences">回复偏好 /preferences.md</string>
+    <string name="memory_template_topic">主题 /topics/...</string>
+    <string name="memory_topic_name">主题文件名</string>
+    <string name="memory_topic_hint">例如 work、health、projects</string>
+    <string name="memory_copy">复制</string>
+    <string name="memory_save_to">存入记忆</string>
+    <string name="memory_saved_to">已存入 %1$s</string>
+    <string name="memory_fixed">固定</string>
+    <string name="memory_updated_format">更新于 %1$s</string>
+    <string name="memory_bytes_format">%1$d 字节</string>
+    <string name="memory_choose_target">存入哪个记忆？</string>
+    <string name="memory_new_topic">新建主题记忆…</string>
+    <string name="memory_content_preview">将要写入的内容</string>
+    <string name="memory_append_hint">这一行会追加到文件末尾</string>
+    <string name="memory_delete_confirm">删除这条记忆？此操作不可撤销。</string>
+    <string name="memory_delete_failed">删除失败：%1$s</string>
+    <string name="memory_path_exists">该路径已存在</string>
+    <string name="memory_copied">已复制</string>
+    <string name="memory_load_failed">读取失败</string>
+    <string name="memory_pick_first">还没有记忆，先新建一条吧</string>
+
+    <!-- 生图参考图 -->
+    <string name="imagegen_ref_title">参考图（可选，最多 3 张）</string>
+    <string name="imagegen_ref_add">添加参考图</string>
+    <string name="imagegen_ref_count">参考图 %1$d/3</string>
+    <string name="imagegen_ref_limit">最多 3 张参考图</string>
+    <string name="imagegen_ref_only_modelscope">该模型或渠道可能不支持图生图，可移除参考图或更换模型。</string>
+    <string name="imagegen_ref_hint">上传图片即图生图，不上传即文生图。支持魔搭与 OpenAI 兼容编辑接口。</string>
+    <string name="imagegen_ref_remove">移除</string>
+    <string name="imagegen_ref_compressed">参考图压缩为 1080px JPEG 后上传，单图 image、多图 image[] 字段。</string>
+    <string name="imagegen_oom">图片过大，内存不足，请降低尺寸后重试</string>
+    <string name="imagegen_timeout_billing">请求超时。服务端可能已出图并计费，请查看中转站记录后再决定是否重试</string>
     <string-array name="imagegen_sizes">
         <item>1024x1024</item>
         <item>1024x1792</item>

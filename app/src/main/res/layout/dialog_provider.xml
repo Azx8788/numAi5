@@ -69,5 +69,13 @@
                 android:paddingEnd="10dp"
                 android:text="@string/show_key" />
         </LinearLayout>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="@string/api_key_plain_hint"
+            android:textColor="@color/text_meta"
+            android:textSize="11sp" />
     </LinearLayout>
 </ScrollView>

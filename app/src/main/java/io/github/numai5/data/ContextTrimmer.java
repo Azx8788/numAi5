@@ -13,9 +13,9 @@ import io.github.numai5.model.Role;
 public class ContextTrimmer {
 
     /** 默认保留最近 12 个完整回合 */
-    private static final int DEFAULT_MAX_ROUNDS = 12;
+    public static final int DEFAULT_MAX_ROUNDS = 12;
     /** 字符预算，按约 4 chars/token 估算，默认 ~32k tokens */
-    private static final int DEFAULT_MAX_CHARS = 32_000 * 4;
+    public static final int DEFAULT_MAX_CHARS = 32_000 * 4;
 
     public static boolean trim(List<Message> source, List<Message> target) {
         return trim(source, target, DEFAULT_MAX_ROUNDS, DEFAULT_MAX_CHARS);

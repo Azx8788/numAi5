@@ -3,7 +3,10 @@ package io.github.numai5.ui;
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.drawable.Drawable;
+import android.view.ActionMode;
 import android.view.LayoutInflater;
+import android.view.Menu;
+import android.view.MenuItem;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.HorizontalScrollView;
@@ -38,8 +41,14 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
         void onRetry(Message failedMessage);
     }
 
+    /** 文本选择工具栏里的「存入记忆」 */
+    public interface OnMemorySelectionListener {
+        void onSaveSelection(String text, boolean stated);
+    }
+
     private List<Message> messages;
     private OnRetryListener retryListener;
+    private OnMemorySelectionListener memorySelectionListener;
 
     public MessageAdapter(List<Message> messages) {
         this.messages = messages;
@@ -47,6 +56,10 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
 
     public void setRetryListener(OnRetryListener listener) {
         this.retryListener = listener;
+    }
+
+    public void setOnMemorySelectionListener(OnMemorySelectionListener listener) {
+        this.memorySelectionListener = listener;
     }
 
     @Override
@@ -73,9 +86,9 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
     public void onBindViewHolder(@NonNull RecyclerView.ViewHolder holder, int position) {
         Message msg = messages.get(position);
         if (holder instanceof UserViewHolder) {
-            ((UserViewHolder) holder).bind(msg);
+            ((UserViewHolder) holder).bind(msg, memorySelectionListener);
         } else {
-            ((AssistantViewHolder) holder).bind(msg, retryListener);
+            ((AssistantViewHolder) holder).bind(msg, retryListener, memorySelectionListener);
         }
     }
 
@@ -84,18 +97,63 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
         return messages == null ? 0 : messages.size();
     }
 
+    /**
+     * 文本选择工具栏：保留系统复制/全选，额外提供「存入记忆」。
+     * 选区可能反向拖选（end < start），用 min/max 归一；空选区直接忽略。
+     * 取文本必须在 mode.finish() 之前，否则选区被清空。
+     */
+    static ActionMode.Callback selectionCallback(final TextView textView,
+                                                 final OnMemorySelectionListener listener,
+                                                 final boolean stated) {
+        return new ActionMode.Callback() {
+            @Override
+            public boolean onCreateActionMode(ActionMode mode, Menu menu) {
+                menu.add(Menu.NONE, 1, Menu.NONE, R.string.memory_save_to);
+                return true;
+            }
+
+            @Override
+            public boolean onPrepareActionMode(ActionMode mode, Menu menu) {
+                return false;
+            }
+
+            @Override
+            public boolean onActionItemClicked(ActionMode mode, MenuItem item) {
+                if (item.getItemId() != 1) return false;
+                int start = textView.getSelectionStart();
+                int end = textView.getSelectionEnd();
+                if (start >= 0 && end >= 0 && start != end && listener != null) {
+                    int s = Math.min(start, end);
+                    int e = Math.max(start, end);
+                    CharSequence selected = textView.getText().subSequence(s, e);
+                    if (selected.length() > 0) {
+                        listener.onSaveSelection(selected.toString(), stated);
+                    }
+                }
+                mode.finish();
+                return true;
+            }
+
+            @Override
+            public void onDestroyActionMode(ActionMode mode) {
+            }
+        };
+    }
+
     static class UserViewHolder extends RecyclerView.ViewHolder {
         TextView content;
         UserViewHolder(View v) {
             super(v);
             content = v.findViewById(R.id.userContentText);
         }
-        void bind(Message msg) {
+        void bind(final Message msg, final OnMemorySelectionListener listener) {
             String text = msg.content == null ? "" : msg.content;
             if (msg.inputImages != null && !msg.inputImages.isEmpty()) {
                 text = text + " [图片]";
             }
             content.setText(text);
+            content.setTextIsSelectable(true);
+            content.setCustomSelectionActionModeCallback(selectionCallback(content, listener, true));
         }
     }
 
@@ -120,7 +178,8 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
             MathSpan.installCopyFix(thinkingContent);
         }
 
-        void bind(Message msg, final OnRetryListener retryListener) {
+        void bind(final Message msg, final OnRetryListener retryListener,
+                  final OnMemorySelectionListener memoryListener) {
             Context context = itemView.getContext();
 
             // 思考过程
@@ -143,7 +202,7 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
             // 正文：分段渲染，超宽公式单独成块（可横向滑动）
             String display = msg.getDisplayRaw();
             if (display == null || display.length() == 0) display = msg.content == null ? "" : msg.content;
-            bindContent(context, display);
+            bindContent(context, display, memoryListener);
 
             // 生图结果
             bindGeneratedImages(context, msg);
@@ -177,7 +236,8 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
          * 渲染正文。普通文本用 TextView，超宽公式单独放在 HorizontalScrollView 里按原始尺寸显示，
          * 避免长公式被等比压缩到屏宽后「又小又长」且超出部分看不到。
          */
-        private void bindContent(Context context, String display) {
+        private void bindContent(Context context, String display,
+                                 final OnMemorySelectionListener listener) {
             contentContainer.removeAllViews();
             float textSize = contentContainer.getResources().getDisplayMetrics().scaledDensity * 15f;
             int color = ContextCompat.getColor(context, R.color.text_assistant);
@@ -194,6 +254,7 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
                     tv.setTextColor(color);
                     tv.setTextIsSelectable(true);
                     tv.setText(block.text);
+                    tv.setCustomSelectionActionModeCallback(selectionCallback(tv, listener, false));
                     MathSpan.installCopyFix(tv);
                     contentContainer.addView(tv);
                 } else {
@@ -205,6 +266,7 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
                         tv.setTextColor(color);
                         tv.setTextIsSelectable(true);
                         tv.setText(block.raw);
+                        tv.setCustomSelectionActionModeCallback(selectionCallback(tv, listener, false));
                         contentContainer.addView(tv);
                     } else {
                         ImageView image = new ImageView(context);

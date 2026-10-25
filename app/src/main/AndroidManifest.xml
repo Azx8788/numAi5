@@ -35,6 +35,12 @@
             android:name=".SettingsActivity"
             android:windowSoftInputMode="stateHidden" />
 
+        <!-- 本地记忆管理 -->
+        <activity
+            android:name=".MemoryActivity"
+            android:label="@string/memory_title"
+            android:windowSoftInputMode="adjustResize" />
+
         <!-- AI 绘图独立页（不混入聊天会话） -->
         <activity
             android:name=".ImageGenActivity"

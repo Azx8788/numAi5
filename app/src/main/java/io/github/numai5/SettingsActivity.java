@@ -44,7 +44,7 @@ import io.github.numai5.ui.ModelSelectorSheet;
 public class SettingsActivity extends AppCompatActivity {
 
     private LinearLayout providerList;
-    private Button btnAddProvider, btnDefaultModel, btnSave, btnExportBackup, btnImportBackup, btnImageGenTag, btnUiTune;
+    private Button btnAddProvider, btnDefaultModel, btnSave, btnExportBackup, btnImportBackup, btnImageGenTag, btnUiTune, btnMemory;
     private EditText editSystemPrompt;
     private SwitchMaterial switchNewapi;
     private ConfigManager configManager;
@@ -98,6 +98,7 @@ public class SettingsActivity extends AppCompatActivity {
         btnImportBackup = findViewById(R.id.btnImportBackup);
         btnImageGenTag = findViewById(R.id.btnImageGenTag);
         btnUiTune = findViewById(R.id.btnUiTune);
+        btnMemory = findViewById(R.id.btnMemory);
         editSystemPrompt = findViewById(R.id.editSystemPrompt);
         switchNewapi = findViewById(R.id.switchNewapi);
 
@@ -119,6 +120,7 @@ public class SettingsActivity extends AppCompatActivity {
         btnImportBackup.setOnClickListener(v -> startImport());
         btnImageGenTag.setOnClickListener(v -> showModelTagDialog());
         btnUiTune.setOnClickListener(v -> startActivity(new Intent(this, TuneActivity.class)));
+        btnMemory.setOnClickListener(v -> startActivity(new Intent(this, MemoryActivity.class)));
     }
 
     // ===== 绘图模型标记 =====

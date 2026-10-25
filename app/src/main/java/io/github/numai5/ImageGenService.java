@@ -39,17 +39,26 @@ public class ImageGenService extends Service {
     private static final String EXTRA_PROMPT = "prompt";
     private static final String EXTRA_SIZE = "size";
     private static final String EXTRA_N = "n";
+    private static final String EXTRA_REF_IMAGES = "refImages";
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
     public static void start(Context context, String providerId, String modelId,
                              String prompt, String size, int n) {
+        start(context, providerId, modelId, prompt, size, n, null);
+    }
+
+    public static void start(Context context, String providerId, String modelId,
+                             String prompt, String size, int n, List<String> refImages) {
         Intent intent = new Intent(context, ImageGenService.class);
         intent.putExtra(EXTRA_PROVIDER_ID, providerId);
         intent.putExtra(EXTRA_MODEL_ID, modelId);
         intent.putExtra(EXTRA_PROMPT, prompt);
         intent.putExtra(EXTRA_SIZE, size);
         intent.putExtra(EXTRA_N, n);
+        if (refImages != null && !refImages.isEmpty()) {
+            intent.putStringArrayListExtra(EXTRA_REF_IMAGES, new java.util.ArrayList<>(refImages));
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             ContextCompat.startForegroundService(context, intent);
         } else {
@@ -78,12 +87,14 @@ public class ImageGenService extends Service {
         final String prompt = intent.getStringExtra(EXTRA_PROMPT);
         final String size = intent.getStringExtra(EXTRA_SIZE);
         final int n = intent.getIntExtra(EXTRA_N, 1);
+        final java.util.ArrayList<String> refImages = intent.getStringArrayListExtra(EXTRA_REF_IMAGES);
 
-        new Thread(() -> runTask(providerId, modelId, prompt, size, n)).start();
+        new Thread(() -> runTask(providerId, modelId, prompt, size, n, refImages)).start();
         return START_NOT_STICKY;
     }
 
-    private void runTask(String providerId, String modelId, String prompt, String size, int n) {
+    private void runTask(String providerId, String modelId, String prompt, String size, int n,
+                         List<String> refImages) {
         List<String> filenames = null;
         String error = null;
         try {
@@ -93,7 +104,8 @@ public class ImageGenService extends Service {
                 error = "供应商或模型已不存在";
             } else {
                 ImageGenApi.Outcome outcome = ImageGenApi.generate(
-                        getApplicationContext(), provider, model.requestId(), prompt, size, n);
+                        getApplicationContext(), provider, model.requestId(), prompt, size, n,
+                        refImages);
                 filenames = outcome.filenames;
                 if (outcome.revisedPrompt != null) {
                     Log.i(TAG, "revised prompt: " + outcome.revisedPrompt);
@@ -101,6 +113,8 @@ public class ImageGenService extends Service {
             }
         } catch (ApiError e) {
             error = e.getMessage();
+        } catch (OutOfMemoryError e) {
+            error = getString(R.string.imagegen_oom);
         } catch (Exception e) {
             Log.e(TAG, "image gen failed", e);
             error = e.getMessage() != null ? e.getMessage() : "未知错误";
