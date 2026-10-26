@@ -38,6 +38,8 @@ public class Message {
     public transient StringBuilder contentBuffer;
     public transient StringBuilder matchingTagBuffer;
     public transient boolean isThinkingState;
+    /** 思考过程是否折叠（纯界面状态，不持久化；放在消息上避免 ViewHolder 复用时丢失） */
+    public transient boolean thinkingCollapsed;
     public transient List<StreamToolCall> streamingToolCalls;
 
     /**

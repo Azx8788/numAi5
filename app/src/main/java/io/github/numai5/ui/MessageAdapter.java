@@ -33,6 +33,8 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
     private static final int TYPE_USER = 0;
     private static final int TYPE_ASSISTANT = 1;
     private static final int TYPE_TOOL = 2;
+    /** 流式局部刷新标记：只更新文本，不重建视图 */
+    public static final String PAYLOAD_STREAM = "stream";
     /** 气泡内图片显式最大边长（px 级采样目标） */
     private static final int IMAGE_MAX_SIZE = 720;
 
@@ -90,6 +92,18 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
         } else {
             ((AssistantViewHolder) holder).bind(msg, retryListener, memorySelectionListener);
         }
+    }
+
+    @Override
+    public void onBindViewHolder(@NonNull RecyclerView.ViewHolder holder, int position,
+                                 @NonNull List<Object> payloads) {
+        if (!payloads.isEmpty() && holder instanceof AssistantViewHolder
+                && ((AssistantViewHolder) holder).boundMessage == messages.get(position)) {
+            ((AssistantViewHolder) holder)
+                    .updateStreaming(messages.get(position), memorySelectionListener);
+            return;
+        }
+        super.onBindViewHolder(holder, position, payloads);
     }
 
     @Override
@@ -164,7 +178,11 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
         LinearLayout contentContainer;
         TextView metaText;
         LinearLayout imageContainer;
-        boolean thinkingCollapsed = false;
+        /** 上次渲染的文本，流式刷新时相同则跳过 */
+        private String lastThinking = null;
+        private String lastDisplay = null;
+        /** 当前绑定的消息，流式 payload 刷新时校验，避免 ViewHolder 复用到别的消息 */
+        Message boundMessage = null;
 
         AssistantViewHolder(View v) {
             super(v);
@@ -181,28 +199,28 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
         void bind(final Message msg, final OnRetryListener retryListener,
                   final OnMemorySelectionListener memoryListener) {
             Context context = itemView.getContext();
+            boundMessage = msg;
 
             // 思考过程
             String thinking = msg.getThinkingRaw();
             if (thinking != null && thinking.length() > 0) {
                 thinkingContainer.setVisibility(View.VISIBLE);
-                thinkingLabel.setText(thinkingCollapsed ? "▶ 思考过程" : "▼ 思考过程");
-                thinkingContent.setVisibility(thinkingCollapsed ? View.GONE : View.VISIBLE);
+                thinkingLabel.setText(msg.thinkingCollapsed ? "▶ 思考过程" : "▼ 思考过程");
+                thinkingContent.setVisibility(msg.thinkingCollapsed ? View.GONE : View.VISIBLE);
                 thinkingContent.setText(MarkdownParser.parse(context, thinking, false,
                         thinkingContent.getCurrentTextColor(), thinkingContent.getTextSize()));
-                thinkingLabel.setOnClickListener(v -> {
-                    thinkingCollapsed = !thinkingCollapsed;
-                    thinkingLabel.setText(thinkingCollapsed ? "▶ 思考过程" : "▼ 思考过程");
-                    thinkingContent.setVisibility(thinkingCollapsed ? View.GONE : View.VISIBLE);
-                });
+                lastThinking = thinking;
+                bindThinkingToggle(msg);
             } else {
                 thinkingContainer.setVisibility(View.GONE);
+                lastThinking = null;
             }
 
             // 正文：分段渲染，超宽公式单独成块（可横向滑动）
             String display = msg.getDisplayRaw();
             if (display == null || display.length() == 0) display = msg.content == null ? "" : msg.content;
             bindContent(context, display, memoryListener);
+            lastDisplay = display;
 
             // 生图结果
             bindGeneratedImages(context, msg);
@@ -230,6 +248,82 @@ public class MessageAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder
                 metaText.setText(meta.toString());
                 metaText.setOnClickListener(null);
             }
+        }
+
+        /** 思考折叠按钮：折叠状态存在 Message 上，避免 ViewHolder 复用时丢失 */
+        private void bindThinkingToggle(final Message msg) {
+            thinkingLabel.setOnClickListener(v -> {
+                msg.thinkingCollapsed = !msg.thinkingCollapsed;
+                thinkingLabel.setText(msg.thinkingCollapsed ? "▶ 思考过程" : "▼ 思考过程");
+                if (!msg.thinkingCollapsed) {
+                    String cur = msg.getThinkingRaw();
+                    if (cur != null && cur.length() > 0 && !cur.equals(lastThinking)) {
+                        Context c = itemView.getContext();
+                        thinkingContent.setText(MarkdownParser.parse(c, cur, false,
+                                thinkingContent.getCurrentTextColor(), thinkingContent.getTextSize()));
+                        lastThinking = cur;
+                    }
+                }
+                thinkingContent.setVisibility(msg.thinkingCollapsed ? View.GONE : View.VISIBLE);
+            });
+        }
+
+        /** 流式局部刷新：只更新变化的文本，不重建视图，避免列表高度反复抖动 */
+        void updateStreaming(final Message msg, final OnMemorySelectionListener memoryListener) {
+            Context context = itemView.getContext();
+
+            String thinking = msg.getThinkingRaw();
+            if (thinking != null && thinking.length() > 0) {
+                if (thinkingContainer.getVisibility() != View.VISIBLE) {
+                    thinkingContainer.setVisibility(View.VISIBLE);
+                    thinkingLabel.setText(msg.thinkingCollapsed ? "▶ 思考过程" : "▼ 思考过程");
+                    bindThinkingToggle(msg);
+                }
+                if (!msg.thinkingCollapsed && !thinking.equals(lastThinking)) {
+                    thinkingContent.setText(MarkdownParser.parse(context, thinking, false,
+                            thinkingContent.getCurrentTextColor(), thinkingContent.getTextSize()));
+                    lastThinking = thinking;
+                }
+                thinkingContent.setVisibility(msg.thinkingCollapsed ? View.GONE : View.VISIBLE);
+            } else {
+                thinkingContainer.setVisibility(View.GONE);
+                lastThinking = null;
+            }
+
+            String display = msg.getDisplayRaw();
+            if (display == null || display.length() == 0) display = msg.content == null ? "" : msg.content;
+            if (!display.equals(lastDisplay)) {
+                updateContentText(context, display, memoryListener);
+                lastDisplay = display;
+            }
+        }
+
+        /** 正文增量更新：块数与类型不变时只 setText，避免每 200 毫秒重建全部视图 */
+        private void updateContentText(Context context, String display,
+                                       final OnMemorySelectionListener listener) {
+            float textSize = contentContainer.getResources().getDisplayMetrics().scaledDensity * 15f;
+            int color = ContextCompat.getColor(context, R.color.text_assistant);
+            List<MarkdownParser.DisplayBlock> blocks =
+                    MarkdownParser.parseBlocks(context, display, color, textSize);
+            int childCount = contentContainer.getChildCount();
+            boolean sameShape = childCount > 0 && childCount == blocks.size();
+            if (sameShape) {
+                for (int i = 0; i < childCount; i++) {
+                    View child = contentContainer.getChildAt(i);
+                    if (!(child instanceof TextView)
+                            || blocks.get(i).type != MarkdownParser.DisplayBlock.TYPE_TEXT) {
+                        sameShape = false;
+                        break;
+                    }
+                }
+            }
+            if (sameShape) {
+                for (int i = 0; i < childCount; i++) {
+                    ((TextView) contentContainer.getChildAt(i)).setText(blocks.get(i).text);
+                }
+                return;
+            }
+            bindContent(context, display, listener);
         }
 
         /**

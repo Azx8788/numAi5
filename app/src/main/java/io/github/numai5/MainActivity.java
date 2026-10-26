@@ -84,6 +84,8 @@ public class MainActivity extends AppCompatActivity implements StreamSession.Lis
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private int lastRev = -1;
+    /** 是否跟随到底部：用户上滑查看历史时置 false，滑回底部恢复 */
+    private boolean followBottom = true;
     private final Runnable pollRunnable = new Runnable() {
         @Override
         public void run() {
@@ -139,6 +141,24 @@ public class MainActivity extends AppCompatActivity implements StreamSession.Lis
 
         messageList = findViewById(R.id.messageList);
         messageList.setLayoutManager(new LinearLayoutManager(this));
+        // 消息列表不需要条目动画：流式刷新时 notifyItemChanged 的默认动画会造成文字上下跳动
+        messageList.setItemAnimator(null);
+        messageList.addOnScrollListener(new RecyclerView.OnScrollListener() {
+            @Override
+            public void onScrollStateChanged(RecyclerView rv, int newState) {
+                if (newState == RecyclerView.SCROLL_STATE_IDLE) {
+                    followBottom = !rv.canScrollVertically(1);
+                }
+            }
+
+            @Override
+            public void onScrolled(RecyclerView rv, int dx, int dy) {
+                // 只有手指拖动才算用户主动离开底部，程序滚动不算
+                if (rv.getScrollState() == RecyclerView.SCROLL_STATE_DRAGGING) {
+                    followBottom = false;
+                }
+            }
+        });
         inputText = findViewById(R.id.inputText);
         btnModel = findViewById(R.id.btnModel);
         btnThinking = findViewById(R.id.btnThinking);
@@ -364,8 +384,9 @@ public class MainActivity extends AppCompatActivity implements StreamSession.Lis
     private void notifyStreamingItem() {
         int count = adapter.getItemCount();
         if (count > 0) {
-            adapter.notifyItemChanged(count - 1);
-            messageList.scrollToPosition(count - 1);
+            // 带 payload 只刷新文本，避免整条重建导致高度抖动
+            adapter.notifyItemChanged(count - 1, MessageAdapter.PAYLOAD_STREAM);
+            if (followBottom) messageList.scrollToPosition(count - 1);
         }
     }
 
@@ -374,7 +395,7 @@ public class MainActivity extends AppCompatActivity implements StreamSession.Lis
         int count = adapter.getItemCount();
         if (count > 0) {
             adapter.notifyItemChanged(count - 1);
-            messageList.scrollToPosition(count - 1);
+            if (followBottom) messageList.scrollToPosition(count - 1);
         }
     }
 
@@ -384,7 +405,7 @@ public class MainActivity extends AppCompatActivity implements StreamSession.Lis
         int count = adapter.getItemCount();
         if (count > 0) {
             adapter.notifyItemChanged(count - 1);
-            messageList.scrollToPosition(count - 1);
+            if (followBottom) messageList.scrollToPosition(count - 1);
         }
         if (error != null) {
             String message = error.getMessage();
@@ -461,6 +482,7 @@ public class MainActivity extends AppCompatActivity implements StreamSession.Lis
     }
 
     private void scrollToBottom() {
+        followBottom = true;
         int count = adapter.getItemCount();
         if (count > 0) {
             messageList.scrollToPosition(count - 1);
